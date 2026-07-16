@@ -28,6 +28,7 @@ The first useful version should explore:
 - Using pressure data when the browser and input device provide it.
 - Brush and eraser tools.
 - Simple shape tools such as rectangle, ellipse / circle, rounded rectangle, and line.
+- A single shared theme-aware current color used by brush and shape tools; shapes switch between outline-only and solid-fill-only rendering.
 - Undo for recent drawing or editing actions.
 - Copying the composed image to the clipboard.
 - Saving / downloading the composed image.

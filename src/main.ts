@@ -3,229 +3,22 @@ import {
   type BrushSettings,
   type CanvasTheme,
   type CanvasTool,
+  type ShapeKind,
+  type ShapeSettings,
 } from "./canvas";
+import {
+  COLOR_SLOTS,
+  createThemeColorPair,
+  getColorSlot,
+  getColorSlotPair,
+  getColorSlotValue,
+  isColorSlotId,
+  loadColorOverrides,
+  saveColorOverrides,
+  type ColorSlotId,
+  type ThemeMode,
+} from "./colors";
 import "./styles.css";
-
-const COLOR_STORAGE_KEY = "promptsketch.color-overrides";
-const COLOR_STORAGE_VERSION = 2;
-const COLOR_SLOTS = [
-  {
-    id: "ink",
-    label: "Black / White",
-    defaultColors: { light: "#1f2320", dark: "#e7e4da" },
-  },
-  {
-    id: "red",
-    label: "Red",
-    defaultColors: { light: "#e4572e", dark: "#ff8b70" },
-  },
-  {
-    id: "blue",
-    label: "Blue",
-    defaultColors: { light: "#1f7a8c", dark: "#69c5d4" },
-  },
-  {
-    id: "green",
-    label: "Green",
-    defaultColors: { light: "#2f7d4a", dark: "#72d69a" },
-  },
-  {
-    id: "yellow",
-    label: "Yellow",
-    defaultColors: { light: "#f2c200", dark: "#f0cf5a" },
-  },
-] as const;
-
-type ThemeMode = "light" | "dark";
-type ColorSlotId = (typeof COLOR_SLOTS)[number]["id"];
-type ColorPair = Record<ThemeMode, string>;
-type ColorOverrides = Partial<Record<ColorSlotId, ColorPair>>;
-
-type HslColor = {
-  hue: number;
-  saturation: number;
-  lightness: number;
-};
-
-const isHexColor = (value: unknown): value is string =>
-  typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
-
-const isColorSlotId = (value: string | undefined): value is ColorSlotId =>
-  COLOR_SLOTS.some((slot) => slot.id === value);
-
-const clampNumber = (value: number, min: number, max: number): number =>
-  Math.min(Math.max(value, min), max);
-
-const hexToHsl = (hexColor: string): HslColor => {
-  const value = Number.parseInt(hexColor.slice(1), 16);
-  const red = ((value >> 16) & 0xff) / 255;
-  const green = ((value >> 8) & 0xff) / 255;
-  const blue = (value & 0xff) / 255;
-  const maximum = Math.max(red, green, blue);
-  const minimum = Math.min(red, green, blue);
-  const difference = maximum - minimum;
-  const lightness = (maximum + minimum) / 2;
-  let hue = 0;
-
-  if (difference !== 0) {
-    if (maximum === red) {
-      hue = ((green - blue) / difference) % 6;
-    } else if (maximum === green) {
-      hue = (blue - red) / difference + 2;
-    } else {
-      hue = (red - green) / difference + 4;
-    }
-
-    hue *= 60;
-
-    if (hue < 0) {
-      hue += 360;
-    }
-  }
-
-  const saturation =
-    difference === 0 ? 0 : difference / (1 - Math.abs(2 * lightness - 1));
-
-  return {
-    hue,
-    saturation: saturation * 100,
-    lightness: lightness * 100,
-  };
-};
-
-const hslToHex = ({ hue, saturation, lightness }: HslColor): string => {
-  const normalizedSaturation = saturation / 100;
-  const normalizedLightness = lightness / 100;
-  const chroma =
-    (1 - Math.abs(2 * normalizedLightness - 1)) * normalizedSaturation;
-  const hueSegment = hue / 60;
-  const secondary = chroma * (1 - Math.abs((hueSegment % 2) - 1));
-  const match = normalizedLightness - chroma / 2;
-  let red = 0;
-  let green = 0;
-  let blue = 0;
-
-  if (hueSegment < 1) {
-    red = chroma;
-    green = secondary;
-  } else if (hueSegment < 2) {
-    red = secondary;
-    green = chroma;
-  } else if (hueSegment < 3) {
-    green = chroma;
-    blue = secondary;
-  } else if (hueSegment < 4) {
-    green = secondary;
-    blue = chroma;
-  } else if (hueSegment < 5) {
-    red = secondary;
-    blue = chroma;
-  } else {
-    red = chroma;
-    blue = secondary;
-  }
-
-  const toHexChannel = (channel: number): string =>
-    Math.round((channel + match) * 255)
-      .toString(16)
-      .padStart(2, "0");
-
-  return `#${toHexChannel(red)}${toHexChannel(green)}${toHexChannel(blue)}`;
-};
-
-const createThemeColorPair = (color: string, sourceTheme: ThemeMode): ColorPair => {
-  const hslColor = hexToHsl(color);
-  const pairedLightness =
-    sourceTheme === "light"
-      ? clampNumber(100 - hslColor.lightness, 62, 82)
-      : clampNumber(100 - hslColor.lightness, 18, 42);
-  const pairedColor = hslToHex({
-    ...hslColor,
-    lightness: pairedLightness,
-  });
-
-  return sourceTheme === "light"
-    ? { light: color, dark: pairedColor }
-    : { light: pairedColor, dark: color };
-};
-
-const loadColorOverrides = (): ColorOverrides => {
-  try {
-    const storedValue = localStorage.getItem(COLOR_STORAGE_KEY);
-
-    if (!storedValue) {
-      return {};
-    }
-
-    const parsedValue: unknown = JSON.parse(storedValue);
-
-    if (
-      typeof parsedValue !== "object" ||
-      parsedValue === null ||
-      !("version" in parsedValue) ||
-      !("overrides" in parsedValue) ||
-      typeof parsedValue.overrides !== "object" ||
-      parsedValue.overrides === null
-    ) {
-      return {};
-    }
-
-    const storedOverrides = parsedValue.overrides as Record<string, unknown>;
-    const validOverrides: ColorOverrides = {};
-
-    COLOR_SLOTS.forEach((slot) => {
-      const storedOverride =
-        storedOverrides[slot.id] ??
-        (slot.id === "yellow" ? storedOverrides.ochre : undefined);
-
-      if (parsedValue.version === 1 && isHexColor(storedOverride)) {
-        validOverrides[slot.id] = createThemeColorPair(
-          storedOverride.toLowerCase(),
-          "light",
-        );
-        return;
-      }
-
-      if (
-        parsedValue.version === COLOR_STORAGE_VERSION &&
-        typeof storedOverride === "object" &&
-        storedOverride !== null &&
-        "light" in storedOverride &&
-        "dark" in storedOverride &&
-        isHexColor(storedOverride.light) &&
-        isHexColor(storedOverride.dark)
-      ) {
-        validOverrides[slot.id] = {
-          light: storedOverride.light.toLowerCase(),
-          dark: storedOverride.dark.toLowerCase(),
-        };
-      }
-    });
-
-    return validOverrides;
-  } catch {
-    return {};
-  }
-};
-
-const saveColorOverrides = (overrides: ColorOverrides): void => {
-  try {
-    if (Object.keys(overrides).length === 0) {
-      localStorage.removeItem(COLOR_STORAGE_KEY);
-      return;
-    }
-
-    localStorage.setItem(
-      COLOR_STORAGE_KEY,
-      JSON.stringify({
-        version: COLOR_STORAGE_VERSION,
-        overrides,
-      }),
-    );
-  } catch {
-    // Drawing remains usable when browser storage is unavailable.
-  }
-};
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -251,6 +44,33 @@ app.innerHTML = `
       </button>
 
       <div class="panel-content">
+        <section class="panel-section color-section" id="color-section" data-disabled="false" aria-labelledby="color-section-title">
+          <header class="panel-header">
+            <p class="eyebrow">Shared palette</p>
+            <h2 id="color-section-title">Colors</h2>
+          </header>
+
+          <label class="control control--inline" for="active-color">
+            <span>Color <output id="active-color-slot" for="active-color">Black / White</output></span>
+            <input id="active-color" type="color" value="#1f2320" />
+          </label>
+
+          <div class="swatch-row" aria-label="Quick colors">
+            ${COLOR_SLOTS.map(
+              (slot, index) => `
+                <button
+                  class="swatch${index === 0 ? " is-selected" : ""}"
+                  type="button"
+                  data-slot="${slot.id}"
+                  aria-label="${slot.label} color slot"
+                  aria-pressed="${index === 0}"
+                ></button>
+              `,
+            ).join("")}
+          </div>
+          <button class="secondary-button" id="reset-colors" type="button">Reset colors</button>
+        </section>
+
         <section class="panel-section" id="tool-section" data-active-tool="brush" aria-labelledby="tool-section-title">
           <header class="panel-header">
             <p class="eyebrow">Tools</p>
@@ -268,24 +88,43 @@ app.innerHTML = `
             <button
               class="tool-button"
               type="button"
-              data-tool="stroke-eraser"
-              aria-label="Stroke Eraser — erase whole strokes"
+              data-tool="shape"
               aria-pressed="false"
-              title="Erase whole strokes"
-            >Stroke eraser</button>
+              title="Draw geometric shapes"
+            >Shape</button>
+            <button
+              class="tool-button"
+              type="button"
+              data-tool="stroke-eraser"
+              aria-label="Stroke Eraser — erase whole annotations"
+              aria-pressed="false"
+              title="Erase whole annotations"
+            >Eraser</button>
           </div>
 
-          <label class="control control--inline brush-only" for="brush-color">
-            <span>Color <output id="brush-color-slot" for="brush-color">Ink</output></span>
-            <input id="brush-color" type="color" value="#1f2320" />
+          <label class="control shape-only" for="shape-kind">
+            <span>Shape</span>
+            <select id="shape-kind">
+              <option value="rectangle">Rectangle</option>
+              <option value="ellipse">Ellipse / circle</option>
+              <option value="rounded-rectangle">Rounded rectangle</option>
+            </select>
           </label>
 
-          <label class="control" for="tool-size">
+          <label class="control" id="tool-size-control" for="tool-size">
             <span class="control-row">
               <span id="tool-size-label" title="Option + scroll over the canvas">Brush size</span>
               <output id="tool-size-output" for="tool-size">8 px</output>
             </span>
             <input id="tool-size" type="range" min="2" max="48" step="1" value="8" />
+          </label>
+
+          <label class="switch-control shape-only" for="shape-fill-enabled">
+            <span>
+              <span>Solid fill</span>
+              <output id="shape-fill-output" for="shape-fill-enabled">Outline</output>
+            </span>
+            <input id="shape-fill-enabled" type="checkbox" />
           </label>
 
           <label class="control brush-only" for="brush-opacity">
@@ -295,21 +134,6 @@ app.innerHTML = `
             </span>
             <input id="brush-opacity" type="range" min="10" max="100" step="5" value="100" />
           </label>
-
-          <div class="swatch-row brush-only" aria-label="Quick colors">
-            ${COLOR_SLOTS.map(
-              (slot, index) => `
-                <button
-                  class="swatch${index === 0 ? " is-selected" : ""}"
-                  type="button"
-                  data-slot="${slot.id}"
-                  aria-label="${slot.label} color slot"
-                  aria-pressed="${index === 0}"
-                ></button>
-              `,
-            ).join("")}
-          </div>
-          <button class="secondary-button brush-only" id="reset-colors" type="button">Reset colors</button>
         </section>
 
         <section class="panel-section" aria-labelledby="settings-section-title">
@@ -335,7 +159,7 @@ app.innerHTML = `
             <h2 id="new-section-title">Canvas</h2>
           </header>
           <button class="primary-button" id="open-new-canvas" type="button">New canvas</button>
-          <button class="clear-button" id="clear-canvas" type="button">Clear strokes</button>
+          <button class="clear-button" id="clear-canvas" type="button">Clear annotations</button>
         </section>
       </div>
     </aside>
@@ -389,13 +213,18 @@ const eraserCursor = app.querySelector<HTMLElement>("#eraser-cursor");
 const panelToggle = app.querySelector<HTMLButtonElement>("#panel-toggle");
 const toolSection = app.querySelector<HTMLElement>("#tool-section");
 const toolTitle = app.querySelector<HTMLElement>("#tool-section-title");
-const brushColor = app.querySelector<HTMLInputElement>("#brush-color");
-const brushColorSlot = app.querySelector<HTMLOutputElement>("#brush-color-slot");
+const shapeKindInput = app.querySelector<HTMLSelectElement>("#shape-kind");
+const shapeFillEnabled = app.querySelector<HTMLInputElement>("#shape-fill-enabled");
+const shapeFillOutput = app.querySelector<HTMLOutputElement>("#shape-fill-output");
+const toolSizeControl = app.querySelector<HTMLElement>("#tool-size-control");
 const toolSize = app.querySelector<HTMLInputElement>("#tool-size");
 const toolSizeLabel = app.querySelector<HTMLElement>("#tool-size-label");
 const toolSizeOutput = app.querySelector<HTMLOutputElement>("#tool-size-output");
 const brushOpacity = app.querySelector<HTMLInputElement>("#brush-opacity");
 const brushOpacityOutput = app.querySelector<HTMLOutputElement>("#brush-opacity-output");
+const colorSection = app.querySelector<HTMLElement>("#color-section");
+const activeColorInput = app.querySelector<HTMLInputElement>("#active-color");
+const activeColorSlot = app.querySelector<HTMLOutputElement>("#active-color-slot");
 const resetColorsButton = app.querySelector<HTMLButtonElement>("#reset-colors");
 const themeToggle = app.querySelector<HTMLInputElement>("#theme-toggle");
 const themeOutput = app.querySelector<HTMLOutputElement>("#theme-output");
@@ -421,13 +250,18 @@ if (
   !panelToggle ||
   !toolSection ||
   !toolTitle ||
-  !brushColor ||
-  !brushColorSlot ||
+  !shapeKindInput ||
+  !shapeFillEnabled ||
+  !shapeFillOutput ||
+  !toolSizeControl ||
   !toolSize ||
   !toolSizeLabel ||
   !toolSizeOutput ||
   !brushOpacity ||
   !brushOpacityOutput ||
+  !colorSection ||
+  !activeColorInput ||
+  !activeColorSlot ||
   !resetColorsButton ||
   !themeToggle ||
   !themeOutput ||
@@ -450,6 +284,7 @@ let activeColorSlotId: ColorSlotId = COLOR_SLOTS[0].id;
 let activeTheme: ThemeMode = "light";
 let activeTool: CanvasTool = "brush";
 let brushSizeValue = 8;
+let shapeStrokeWidthValue = 4;
 let eraserSizeValue = 32;
 let colorOverrides = loadColorOverrides();
 
@@ -477,44 +312,53 @@ const canvasThemes: Record<ThemeMode, CanvasTheme> = {
   },
 };
 
-const getColorSlot = (slotId: ColorSlotId) =>
-  COLOR_SLOTS.find((slot) => slot.id === slotId) ?? COLOR_SLOTS[0];
-
-const getColorSlotValue = (
+const resolveColorSlotValue = (
   slotId: ColorSlotId,
   theme: ThemeMode = activeTheme,
-): string => {
-  const slot = getColorSlot(slotId);
-  return colorOverrides[slot.id]?.[theme] ?? slot.defaultColors[theme];
-};
+): string => getColorSlotValue(slotId, theme, colorOverrides);
 
-const getColorSlotPair = (slotId: ColorSlotId): ColorPair => ({
-  light: getColorSlotValue(slotId, "light"),
-  dark: getColorSlotValue(slotId, "dark"),
-});
+const resolveColorSlotPair = (slotId: ColorSlotId) =>
+  getColorSlotPair(slotId, colorOverrides);
 
 const getBrushSettings = (): BrushSettings => ({
-  colors: getColorSlotPair(activeColorSlotId),
+  color: resolveColorSlotPair(activeColorSlotId),
   size: brushSizeValue,
   opacity: Number(brushOpacity.value) / 100,
 });
 
-brushColor.value = getColorSlotValue(activeColorSlotId);
+const getShapeSettings = (): ShapeSettings => ({
+  kind: shapeKindInput.value as ShapeKind,
+  color: resolveColorSlotPair(activeColorSlotId),
+  style: shapeFillEnabled.checked ? "fill" : "outline",
+  strokeWidth: shapeStrokeWidthValue,
+});
 
 const adjustToolSize = (steps: number): void => {
   if (steps === 0) {
     return;
   }
 
+  if (activeTool === "shape" && shapeFillEnabled.checked) {
+    return;
+  }
+
   const min = Number(toolSize.min);
   const max = Number(toolSize.max);
   const step = Number(toolSize.step);
-  const current = activeTool === "brush" ? brushSizeValue : eraserSizeValue;
+  const current =
+    activeTool === "brush"
+      ? brushSizeValue
+      : activeTool === "shape"
+        ? shapeStrokeWidthValue
+        : eraserSizeValue;
   const next = Math.min(Math.max(current + steps * step, min), max);
 
   if (activeTool === "brush") {
     brushSizeValue = next;
     syncBrush();
+  } else if (activeTool === "shape") {
+    shapeStrokeWidthValue = next;
+    syncShape();
   } else {
     eraserSizeValue = next;
   }
@@ -531,6 +375,7 @@ const promptCanvas = new PromptCanvas(
     eraserCursor,
   },
   getBrushSettings(),
+  getShapeSettings(),
   canvasThemes[activeTheme],
   {
     onToolSizeChange: adjustToolSize,
@@ -540,9 +385,23 @@ const promptCanvas = new PromptCanvas(
 const syncBrush = (): void => {
   brushOpacityOutput.value = `${brushOpacity.value}%`;
   promptCanvas.updateBrush(getBrushSettings());
-  const activeSlot = getColorSlot(activeColorSlotId);
+};
 
-  brushColorSlot.value = activeSlot.label;
+const syncShape = (): void => {
+  shapeFillOutput.value = shapeFillEnabled.checked ? "Filled" : "Outline";
+  promptCanvas.updateShape(getShapeSettings());
+};
+
+const syncColors = (): void => {
+  const selectedSlot = getColorSlot(activeColorSlotId);
+  const isDisabled = activeTool === "stroke-eraser";
+
+  colorSection.dataset.disabled = String(isDisabled);
+  colorSection.setAttribute("aria-disabled", String(isDisabled));
+  activeColorInput.disabled = isDisabled;
+  resetColorsButton.disabled = isDisabled;
+  activeColorInput.value = resolveColorSlotValue(activeColorSlotId);
+  activeColorSlot.value = selectedSlot.label;
 
   swatches.forEach((swatch) => {
     const slotId = swatch.dataset.slot;
@@ -553,7 +412,8 @@ const syncBrush = (): void => {
 
     const isSelected = slotId === activeColorSlotId;
 
-    swatch.style.setProperty("--swatch-color", getColorSlotValue(slotId));
+    swatch.disabled = isDisabled;
+    swatch.style.setProperty("--swatch-color", resolveColorSlotValue(slotId));
     swatch.classList.toggle("is-selected", isSelected);
     swatch.ariaPressed = String(isSelected);
   });
@@ -561,14 +421,25 @@ const syncBrush = (): void => {
 
 const syncToolControls = (): void => {
   const isBrush = activeTool === "brush";
-  const activeSize = isBrush ? brushSizeValue : eraserSizeValue;
+  const isShape = activeTool === "shape";
+  const activeSize = isBrush
+    ? brushSizeValue
+    : isShape
+      ? shapeStrokeWidthValue
+      : eraserSizeValue;
 
   toolSection.dataset.activeTool = activeTool;
-  toolTitle.textContent = isBrush ? "Brush" : "Stroke Eraser";
-  toolSizeLabel.textContent = isBrush ? "Brush size" : "Eraser size";
-  toolSize.min = isBrush ? "2" : "8";
-  toolSize.max = isBrush ? "48" : "96";
-  toolSize.step = isBrush ? "1" : "2";
+  toolSection.dataset.shapeStyle = shapeFillEnabled.checked ? "fill" : "outline";
+  toolSizeControl.hidden = isShape && shapeFillEnabled.checked;
+  toolTitle.textContent = isBrush ? "Brush" : isShape ? "Shape" : "Stroke Eraser";
+  toolSizeLabel.textContent = isBrush
+    ? "Brush size"
+    : isShape
+      ? "Border width"
+      : "Eraser size";
+  toolSize.min = isBrush ? "2" : isShape ? "1" : "8";
+  toolSize.max = isBrush ? "48" : isShape ? "24" : "96";
+  toolSize.step = isBrush || isShape ? "1" : "2";
   toolSize.value = String(activeSize);
   toolSizeOutput.value = `${activeSize} px`;
 
@@ -580,6 +451,7 @@ const syncToolControls = (): void => {
 
   promptCanvas.updateTool(activeTool);
   promptCanvas.updateEraserSize(eraserSizeValue);
+  syncColors();
 };
 
 const syncThemeLabel = (): void => {
@@ -611,11 +483,11 @@ const applyRatioPreset = (): void => {
   canvasHeight.value = String(height);
 };
 
-brushColor.addEventListener("input", () => {
-  const activeSlot = getColorSlot(activeColorSlotId);
-  const nextColor = brushColor.value.toLowerCase();
+activeColorInput.addEventListener("input", () => {
+  const selectedSlot = getColorSlot(activeColorSlotId);
+  const nextColor = activeColorInput.value.toLowerCase();
 
-  if (nextColor === activeSlot.defaultColors[activeTheme]) {
+  if (nextColor === selectedSlot.defaultColors[activeTheme]) {
     delete colorOverrides[activeColorSlotId];
   } else {
     colorOverrides[activeColorSlotId] = createThemeColorPair(nextColor, activeTheme);
@@ -623,6 +495,8 @@ brushColor.addEventListener("input", () => {
 
   saveColorOverrides(colorOverrides);
   syncBrush();
+  syncShape();
+  syncColors();
 });
 toolSize.addEventListener("input", () => {
   const nextSize = Number(toolSize.value);
@@ -630,6 +504,9 @@ toolSize.addEventListener("input", () => {
   if (activeTool === "brush") {
     brushSizeValue = nextSize;
     syncBrush();
+  } else if (activeTool === "shape") {
+    shapeStrokeWidthValue = nextSize;
+    syncShape();
   } else {
     eraserSizeValue = nextSize;
     promptCanvas.updateEraserSize(eraserSizeValue);
@@ -638,14 +515,20 @@ toolSize.addEventListener("input", () => {
   toolSizeOutput.value = `${nextSize} px`;
 });
 brushOpacity.addEventListener("input", syncBrush);
+shapeKindInput.addEventListener("change", syncShape);
+shapeFillEnabled.addEventListener("change", () => {
+  syncShape();
+  syncToolControls();
+});
 themeToggle.addEventListener("change", () => {
   activeTheme = themeToggle.checked ? "dark" : "light";
   document.documentElement.dataset.theme = activeTheme;
   workspace.dataset.theme = activeTheme;
-  brushColor.value = getColorSlotValue(activeColorSlotId);
   promptCanvas.updateTheme(canvasThemes[activeTheme]);
   syncThemeLabel();
   syncBrush();
+  syncShape();
+  syncColors();
 });
 canvasRatio.addEventListener("change", applyRatioPreset);
 canvasWidth.addEventListener("input", () => {
@@ -666,15 +549,16 @@ swatches.forEach((swatch) => {
 
   swatch.addEventListener("click", () => {
     activeColorSlotId = slotId;
-    brushColor.value = getColorSlotValue(activeColorSlotId);
     syncBrush();
+    syncShape();
+    syncColors();
   });
 });
 
 toolButtons.forEach((button) => {
   const tool = button.dataset.tool;
 
-  if (tool !== "brush" && tool !== "stroke-eraser") {
+  if (tool !== "brush" && tool !== "shape" && tool !== "stroke-eraser") {
     return;
   }
 
@@ -687,8 +571,9 @@ toolButtons.forEach((button) => {
 resetColorsButton.addEventListener("click", () => {
   colorOverrides = {};
   saveColorOverrides(colorOverrides);
-  brushColor.value = getColorSlotValue(activeColorSlotId);
   syncBrush();
+  syncShape();
+  syncColors();
 });
 
 clearButton.addEventListener("click", () => {
@@ -733,6 +618,7 @@ panelToggle.addEventListener("click", () => {
 });
 
 syncBrush();
+syncShape();
 syncToolControls();
 syncThemeLabel();
 

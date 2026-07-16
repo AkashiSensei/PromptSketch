@@ -1,15 +1,28 @@
-import { distanceSquaredBetweenSegments } from "./geometry";
+import type { ThemeColorPair, ThemeMode } from "./colors";
+import {
+  distanceSquaredBetweenSegments,
+  getRoundedRectRadius,
+  getShapeBounds,
+  shapeIntersectsSweptCircle,
+  type ShapeBounds,
+  type ShapeKind,
+} from "./geometry";
 
-export type ColorMode = "light" | "dark";
+export type { ShapeKind } from "./geometry";
 
-export type CanvasTool = "brush" | "stroke-eraser";
-
-export type BrushColors = Record<ColorMode, string>;
+export type CanvasTool = "brush" | "shape" | "stroke-eraser";
 
 export type BrushSettings = {
-  colors: BrushColors;
+  color: ThemeColorPair;
   size: number;
   opacity: number;
+};
+
+export type ShapeSettings = {
+  kind: ShapeKind;
+  color: ThemeColorPair;
+  style: "outline" | "fill";
+  strokeWidth: number;
 };
 
 export type ViewState = {
@@ -19,7 +32,7 @@ export type ViewState = {
 };
 
 export type CanvasTheme = {
-  mode: ColorMode;
+  mode: ThemeMode;
   background: string;
   grid: string;
 };
@@ -43,8 +56,24 @@ type CanvasElements = {
 };
 
 type Stroke = {
+  type: "stroke";
   points: PointerPoint[];
   brush: BrushSettings;
+};
+
+type ShapeAnnotation = {
+  type: "shape";
+  bounds: ShapeBounds;
+  settings: ShapeSettings;
+};
+
+type Annotation = Stroke | ShapeAnnotation;
+
+type ActiveShape = {
+  start: PointerPoint;
+  end: PointerPoint;
+  constrainAspectRatio: boolean;
+  settings: ShapeSettings;
 };
 
 const DEFAULT_BOARD_SIZE: CanvasSize = {
@@ -55,6 +84,8 @@ const MIN_BOARD_SIZE = 320;
 const MAX_BOARD_SIZE = 4096;
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 4;
+const MIN_SHAPE_SIZE = 1;
+const DEFAULT_ROUNDED_RECT_RADIUS = 20;
 
 export class PromptCanvas {
   private readonly viewport: HTMLElement;
@@ -67,13 +98,15 @@ export class PromptCanvas {
   private readonly resizeObserver: ResizeObserver;
   private readonly callbacks: CanvasCallbacks;
   private brush: BrushSettings;
+  private shape: ShapeSettings;
   private tool: CanvasTool = "brush";
   private eraserSize = 32;
   private theme: CanvasTheme;
   private boardSize: CanvasSize = { ...DEFAULT_BOARD_SIZE };
   private hasInitializedView = false;
-  private strokes: Stroke[] = [];
+  private annotations: Annotation[] = [];
   private activeStroke: Stroke | null = null;
+  private activeShape: ActiveShape | null = null;
   private activeEraserPoint: PointerPoint | null = null;
   private isPointerOverCanvas = false;
   private pixelRatio = 1;
@@ -86,6 +119,7 @@ export class PromptCanvas {
   constructor(
     elements: CanvasElements,
     brush: BrushSettings,
+    shape: ShapeSettings,
     theme: CanvasTheme,
     callbacks: CanvasCallbacks = {},
   ) {
@@ -96,6 +130,7 @@ export class PromptCanvas {
     this.eraserCursor = elements.eraserCursor;
     this.callbacks = callbacks;
     this.brush = cloneBrush(brush);
+    this.shape = cloneShapeSettings(shape);
     this.theme = theme;
 
     const backgroundContext = this.backgroundCanvas.getContext("2d");
@@ -115,8 +150,8 @@ export class PromptCanvas {
     this.annotationCanvas.addEventListener("pointerdown", this.handlePointerDown);
     this.annotationCanvas.addEventListener("pointermove", this.handlePointerMove);
     this.annotationCanvas.addEventListener("pointerup", this.handlePointerUp);
-    this.annotationCanvas.addEventListener("pointercancel", this.handlePointerUp);
-    this.annotationCanvas.addEventListener("lostpointercapture", this.handlePointerUp);
+    this.annotationCanvas.addEventListener("pointercancel", this.handlePointerCancel);
+    this.annotationCanvas.addEventListener("lostpointercapture", this.handlePointerCancel);
     this.annotationCanvas.addEventListener("pointerenter", this.handlePointerEnter);
     this.annotationCanvas.addEventListener("pointerleave", this.handlePointerLeave);
 
@@ -128,12 +163,27 @@ export class PromptCanvas {
     this.brush = cloneBrush(brush);
   }
 
+  updateShape(shape: ShapeSettings): void {
+    this.shape = cloneShapeSettings(shape);
+
+    if (this.activeShape) {
+      this.activeShape.settings = cloneShapeSettings(shape);
+      this.renderAnnotations();
+    }
+  }
+
   updateTool(tool: CanvasTool): void {
+    const hadActiveShape = this.activeShape !== null;
     this.tool = tool;
     this.activeStroke = null;
+    this.activeShape = null;
     this.activeEraserPoint = null;
     this.annotationCanvas.dataset.tool = tool;
     this.syncEraserCursorVisibility();
+
+    if (hadActiveShape) {
+      this.renderAnnotations();
+    }
   }
 
   updateEraserSize(size: number): void {
@@ -156,8 +206,9 @@ export class PromptCanvas {
   }
 
   clearAnnotations(): void {
-    this.strokes = [];
+    this.annotations = [];
     this.activeStroke = null;
+    this.activeShape = null;
     this.activeEraserPoint = null;
     this.annotationContext.clearRect(
       0,
@@ -194,8 +245,8 @@ export class PromptCanvas {
     this.annotationCanvas.removeEventListener("pointerdown", this.handlePointerDown);
     this.annotationCanvas.removeEventListener("pointermove", this.handlePointerMove);
     this.annotationCanvas.removeEventListener("pointerup", this.handlePointerUp);
-    this.annotationCanvas.removeEventListener("pointercancel", this.handlePointerUp);
-    this.annotationCanvas.removeEventListener("lostpointercapture", this.handlePointerUp);
+    this.annotationCanvas.removeEventListener("pointercancel", this.handlePointerCancel);
+    this.annotationCanvas.removeEventListener("lostpointercapture", this.handlePointerCancel);
     this.annotationCanvas.removeEventListener("pointerenter", this.handlePointerEnter);
     this.annotationCanvas.removeEventListener("pointerleave", this.handlePointerLeave);
   }
@@ -287,11 +338,24 @@ export class PromptCanvas {
       return;
     }
 
+    if (this.tool === "shape") {
+      this.activeShape = {
+        start: point,
+        end: point,
+        constrainAspectRatio: event.shiftKey,
+        settings: cloneShapeSettings(this.shape),
+      };
+      this.renderAnnotations();
+      event.preventDefault();
+      return;
+    }
+
     this.activeStroke = {
+      type: "stroke",
       points: [point],
       brush: cloneBrush(this.brush),
     };
-    this.strokes.push(this.activeStroke);
+    this.annotations.push(this.activeStroke);
     this.drawDot(point, this.activeStroke.brush);
     event.preventDefault();
   };
@@ -303,7 +367,7 @@ export class PromptCanvas {
       this.syncEraserCursorVisibility();
     }
 
-    if (!this.activeStroke && !this.activeEraserPoint) {
+    if (!this.activeStroke && !this.activeShape && !this.activeEraserPoint) {
       return;
     }
 
@@ -324,6 +388,14 @@ export class PromptCanvas {
         this.renderAnnotations();
       }
 
+      event.preventDefault();
+      return;
+    }
+
+    if (this.activeShape) {
+      this.activeShape.end = this.getPoint(event);
+      this.activeShape.constrainAspectRatio = event.shiftKey;
+      this.renderAnnotations();
       event.preventDefault();
       return;
     }
@@ -349,15 +421,42 @@ export class PromptCanvas {
   };
 
   private handlePointerUp = (event: PointerEvent): void => {
-    if (!this.activeStroke && !this.activeEraserPoint) {
+    if (!this.activeStroke && !this.activeShape && !this.activeEraserPoint) {
       return;
     }
 
+    if (this.activeShape) {
+      this.activeShape.end = this.getPoint(event);
+      this.activeShape.constrainAspectRatio = event.shiftKey;
+      const bounds = this.getActiveShapeBounds(this.activeShape);
+
+      if (bounds.width >= MIN_SHAPE_SIZE && bounds.height >= MIN_SHAPE_SIZE) {
+        this.annotations.push({
+          type: "shape",
+          bounds,
+          settings: cloneShapeSettings(this.activeShape.settings),
+        });
+      }
+    }
+
     this.activeStroke = null;
+    this.activeShape = null;
     this.activeEraserPoint = null;
+    this.renderAnnotations();
 
     if (this.annotationCanvas.hasPointerCapture(event.pointerId)) {
       this.annotationCanvas.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  private handlePointerCancel = (): void => {
+    const hadActiveShape = this.activeShape !== null;
+    this.activeStroke = null;
+    this.activeShape = null;
+    this.activeEraserPoint = null;
+
+    if (hadActiveShape) {
+      this.renderAnnotations();
     }
   };
 
@@ -475,21 +574,63 @@ export class PromptCanvas {
       this.annotationCanvas.height,
     );
 
-    this.strokes.forEach((stroke) => this.renderStroke(stroke));
+    this.annotations.forEach((annotation) => {
+      if (annotation.type === "stroke") {
+        this.renderStroke(annotation);
+      } else {
+        this.renderShape(annotation);
+      }
+    });
+
+    if (this.activeShape) {
+      this.renderShape({
+        type: "shape",
+        bounds: this.getActiveShapeBounds(this.activeShape),
+        settings: this.activeShape.settings,
+      });
+    }
   }
 
   private eraseStrokesAlong(from: PointerPoint, to: PointerPoint): boolean {
     const eraserRadius = this.eraserSize / 2;
-    const remainingStrokes = this.strokes.filter(
-      (stroke) => !this.strokeIntersectsEraser(stroke, from, to, eraserRadius),
+    const remainingAnnotations = this.annotations.filter(
+      (annotation) =>
+        !this.annotationIntersectsEraser(annotation, from, to, eraserRadius),
     );
 
-    if (remainingStrokes.length === this.strokes.length) {
+    if (remainingAnnotations.length === this.annotations.length) {
       return false;
     }
 
-    this.strokes = remainingStrokes;
+    this.annotations = remainingAnnotations;
     return true;
+  }
+
+  private annotationIntersectsEraser(
+    annotation: Annotation,
+    eraserStart: PointerPoint,
+    eraserEnd: PointerPoint,
+    eraserRadius: number,
+  ): boolean {
+    if (annotation.type === "stroke") {
+      return this.strokeIntersectsEraser(
+        annotation,
+        eraserStart,
+        eraserEnd,
+        eraserRadius,
+      );
+    }
+
+    return shapeIntersectsSweptCircle(
+      annotation.settings.kind,
+      annotation.bounds,
+      eraserStart,
+      eraserEnd,
+      eraserRadius,
+      annotation.settings.strokeWidth,
+      annotation.settings.style === "fill",
+      getRoundedRectRadius(annotation.bounds, DEFAULT_ROUNDED_RECT_RADIUS),
+    );
   }
 
   private strokeIntersectsEraser(
@@ -560,12 +701,61 @@ export class PromptCanvas {
     }
   }
 
+  private renderShape(shape: ShapeAnnotation): void {
+    const { bounds, settings } = shape;
+
+    if (bounds.width < MIN_SHAPE_SIZE || bounds.height < MIN_SHAPE_SIZE) {
+      return;
+    }
+
+    const x = bounds.x * this.pixelRatio;
+    const y = bounds.y * this.pixelRatio;
+    const width = bounds.width * this.pixelRatio;
+    const height = bounds.height * this.pixelRatio;
+
+    this.annotationContext.save();
+    this.annotationContext.beginPath();
+
+    if (settings.kind === "ellipse") {
+      this.annotationContext.ellipse(
+        x + width / 2,
+        y + height / 2,
+        width / 2,
+        height / 2,
+        0,
+        0,
+        Math.PI * 2,
+      );
+    } else if (settings.kind === "rounded-rectangle") {
+      const radius =
+        getRoundedRectRadius(bounds, DEFAULT_ROUNDED_RECT_RADIUS) * this.pixelRatio;
+      this.annotationContext.roundRect(x, y, width, height, radius);
+    } else {
+      this.annotationContext.rect(x, y, width, height);
+    }
+
+    if (settings.style === "fill") {
+      this.annotationContext.fillStyle = settings.color[this.theme.mode];
+      this.annotationContext.fill();
+    } else {
+      this.annotationContext.strokeStyle = settings.color[this.theme.mode];
+      this.annotationContext.lineWidth = settings.strokeWidth * this.pixelRatio;
+      this.annotationContext.lineJoin = "round";
+      this.annotationContext.stroke();
+    }
+    this.annotationContext.restore();
+  }
+
+  private getActiveShapeBounds(shape: ActiveShape): ShapeBounds {
+    return getShapeBounds(shape.start, shape.end, shape.constrainAspectRatio);
+  }
+
   private drawDot(point: PointerPoint, brush: BrushSettings): void {
     const radius = this.getStrokeWidth(point.pressure, brush) / 2;
 
     this.annotationContext.save();
     this.annotationContext.globalAlpha = brush.opacity;
-    this.annotationContext.fillStyle = brush.colors[this.theme.mode];
+    this.annotationContext.fillStyle = brush.color[this.theme.mode];
     this.annotationContext.beginPath();
     this.annotationContext.arc(
       point.x * this.pixelRatio,
@@ -585,7 +775,7 @@ export class PromptCanvas {
   ): void {
     this.annotationContext.save();
     this.annotationContext.globalAlpha = brush.opacity;
-    this.annotationContext.strokeStyle = brush.colors[this.theme.mode];
+    this.annotationContext.strokeStyle = brush.color[this.theme.mode];
     this.annotationContext.lineWidth = this.getStrokeWidth(
       (from.pressure + to.pressure) / 2,
       brush,
@@ -635,9 +825,16 @@ type PointerPoint = {
 };
 
 const cloneBrush = (brush: BrushSettings): BrushSettings => ({
-  colors: { ...brush.colors },
+  color: { ...brush.color },
   size: brush.size,
   opacity: brush.opacity,
+});
+
+const cloneShapeSettings = (shape: ShapeSettings): ShapeSettings => ({
+  kind: shape.kind,
+  color: { ...shape.color },
+  style: shape.style,
+  strokeWidth: shape.strokeWidth,
 });
 
 const clamp = (value: number, min: number, max: number): number =>
