@@ -2,6 +2,7 @@ import {
   PromptCanvas,
   type BrushSettings,
   type CanvasTheme,
+  type CanvasTool,
 } from "./canvas";
 import "./styles.css";
 
@@ -239,6 +240,7 @@ app.innerHTML = `
         <div class="canvas-board" id="canvas-board">
           <canvas class="canvas-layer" id="background-canvas" aria-hidden="true"></canvas>
           <canvas class="canvas-layer canvas-layer--drawing" id="annotation-canvas"></canvas>
+          <div class="eraser-cursor" id="eraser-cursor" aria-hidden="true" hidden></div>
         </div>
       </div>
     </section>
@@ -249,26 +251,44 @@ app.innerHTML = `
       </button>
 
       <div class="panel-content">
-        <section class="panel-section" aria-labelledby="brush-section-title">
+        <section class="panel-section" id="tool-section" data-active-tool="brush" aria-labelledby="tool-section-title">
           <header class="panel-header">
             <p class="eyebrow">Tools</p>
-            <h2 id="brush-section-title">Brush</h2>
+            <h2 id="tool-section-title">Brush</h2>
           </header>
 
-          <label class="control control--inline" for="brush-color">
+          <div class="tool-switch" role="group" aria-label="Drawing tool">
+            <button
+              class="tool-button is-selected"
+              type="button"
+              data-tool="brush"
+              aria-pressed="true"
+              title="Draw annotation strokes"
+            >Brush</button>
+            <button
+              class="tool-button"
+              type="button"
+              data-tool="stroke-eraser"
+              aria-label="Stroke Eraser — erase whole strokes"
+              aria-pressed="false"
+              title="Erase whole strokes"
+            >Stroke eraser</button>
+          </div>
+
+          <label class="control control--inline brush-only" for="brush-color">
             <span>Color <output id="brush-color-slot" for="brush-color">Ink</output></span>
             <input id="brush-color" type="color" value="#1f2320" />
           </label>
 
-          <label class="control" for="brush-size">
+          <label class="control" for="tool-size">
             <span class="control-row">
-              <span title="Option + scroll over the canvas">Size</span>
-              <output id="brush-size-output" for="brush-size">8 px</output>
+              <span id="tool-size-label" title="Option + scroll over the canvas">Brush size</span>
+              <output id="tool-size-output" for="tool-size">8 px</output>
             </span>
-            <input id="brush-size" type="range" min="2" max="48" step="1" value="8" />
+            <input id="tool-size" type="range" min="2" max="48" step="1" value="8" />
           </label>
 
-          <label class="control" for="brush-opacity">
+          <label class="control brush-only" for="brush-opacity">
             <span class="control-row">
               <span>Opacity</span>
               <output id="brush-opacity-output" for="brush-opacity">100%</output>
@@ -276,7 +296,7 @@ app.innerHTML = `
             <input id="brush-opacity" type="range" min="10" max="100" step="5" value="100" />
           </label>
 
-          <div class="swatch-row" aria-label="Quick colors">
+          <div class="swatch-row brush-only" aria-label="Quick colors">
             ${COLOR_SLOTS.map(
               (slot, index) => `
                 <button
@@ -289,7 +309,7 @@ app.innerHTML = `
               `,
             ).join("")}
           </div>
-          <button class="secondary-button" id="reset-colors" type="button">Reset colors</button>
+          <button class="secondary-button brush-only" id="reset-colors" type="button">Reset colors</button>
         </section>
 
         <section class="panel-section" aria-labelledby="settings-section-title">
@@ -365,11 +385,15 @@ const stage = app.querySelector<HTMLElement>("#canvas-stage");
 const board = app.querySelector<HTMLElement>("#canvas-board");
 const backgroundCanvas = app.querySelector<HTMLCanvasElement>("#background-canvas");
 const annotationCanvas = app.querySelector<HTMLCanvasElement>("#annotation-canvas");
+const eraserCursor = app.querySelector<HTMLElement>("#eraser-cursor");
 const panelToggle = app.querySelector<HTMLButtonElement>("#panel-toggle");
+const toolSection = app.querySelector<HTMLElement>("#tool-section");
+const toolTitle = app.querySelector<HTMLElement>("#tool-section-title");
 const brushColor = app.querySelector<HTMLInputElement>("#brush-color");
 const brushColorSlot = app.querySelector<HTMLOutputElement>("#brush-color-slot");
-const brushSize = app.querySelector<HTMLInputElement>("#brush-size");
-const brushSizeOutput = app.querySelector<HTMLOutputElement>("#brush-size-output");
+const toolSize = app.querySelector<HTMLInputElement>("#tool-size");
+const toolSizeLabel = app.querySelector<HTMLElement>("#tool-size-label");
+const toolSizeOutput = app.querySelector<HTMLOutputElement>("#tool-size-output");
 const brushOpacity = app.querySelector<HTMLInputElement>("#brush-opacity");
 const brushOpacityOutput = app.querySelector<HTMLOutputElement>("#brush-opacity-output");
 const resetColorsButton = app.querySelector<HTMLButtonElement>("#reset-colors");
@@ -385,6 +409,7 @@ const closeNewCanvasButton = app.querySelector<HTMLButtonElement>("#close-new-ca
 const createNewCanvasButton = app.querySelector<HTMLButtonElement>("#create-new-canvas");
 const clearButton = app.querySelector<HTMLButtonElement>("#clear-canvas");
 const swatches = Array.from(app.querySelectorAll<HTMLButtonElement>(".swatch"));
+const toolButtons = Array.from(app.querySelectorAll<HTMLButtonElement>(".tool-button"));
 
 if (
   !workspace ||
@@ -392,11 +417,15 @@ if (
   !board ||
   !backgroundCanvas ||
   !annotationCanvas ||
+  !eraserCursor ||
   !panelToggle ||
+  !toolSection ||
+  !toolTitle ||
   !brushColor ||
   !brushColorSlot ||
-  !brushSize ||
-  !brushSizeOutput ||
+  !toolSize ||
+  !toolSizeLabel ||
+  !toolSizeOutput ||
   !brushOpacity ||
   !brushOpacityOutput ||
   !resetColorsButton ||
@@ -419,6 +448,9 @@ type RatioPreset = keyof typeof ratioPresets;
 
 let activeColorSlotId: ColorSlotId = COLOR_SLOTS[0].id;
 let activeTheme: ThemeMode = "light";
+let activeTool: CanvasTool = "brush";
+let brushSizeValue = 8;
+let eraserSizeValue = 32;
 let colorOverrides = loadColorOverrides();
 
 document.documentElement.dataset.theme = activeTheme;
@@ -463,24 +495,31 @@ const getColorSlotPair = (slotId: ColorSlotId): ColorPair => ({
 
 const getBrushSettings = (): BrushSettings => ({
   colors: getColorSlotPair(activeColorSlotId),
-  size: Number(brushSize.value),
+  size: brushSizeValue,
   opacity: Number(brushOpacity.value) / 100,
 });
 
 brushColor.value = getColorSlotValue(activeColorSlotId);
 
-const adjustBrushSize = (steps: number): void => {
+const adjustToolSize = (steps: number): void => {
   if (steps === 0) {
     return;
   }
 
-  const min = Number(brushSize.min);
-  const max = Number(brushSize.max);
-  const current = Number(brushSize.value);
-  const next = Math.min(Math.max(current + steps, min), max);
+  const min = Number(toolSize.min);
+  const max = Number(toolSize.max);
+  const step = Number(toolSize.step);
+  const current = activeTool === "brush" ? brushSizeValue : eraserSizeValue;
+  const next = Math.min(Math.max(current + steps * step, min), max);
 
-  brushSize.value = String(next);
-  syncBrush();
+  if (activeTool === "brush") {
+    brushSizeValue = next;
+    syncBrush();
+  } else {
+    eraserSizeValue = next;
+  }
+
+  syncToolControls();
 };
 
 const promptCanvas = new PromptCanvas(
@@ -489,16 +528,16 @@ const promptCanvas = new PromptCanvas(
     board,
     background: backgroundCanvas,
     annotation: annotationCanvas,
+    eraserCursor,
   },
   getBrushSettings(),
   canvasThemes[activeTheme],
   {
-    onBrushSizeChange: adjustBrushSize,
+    onToolSizeChange: adjustToolSize,
   },
 );
 
 const syncBrush = (): void => {
-  brushSizeOutput.value = `${brushSize.value} px`;
   brushOpacityOutput.value = `${brushOpacity.value}%`;
   promptCanvas.updateBrush(getBrushSettings());
   const activeSlot = getColorSlot(activeColorSlotId);
@@ -518,6 +557,29 @@ const syncBrush = (): void => {
     swatch.classList.toggle("is-selected", isSelected);
     swatch.ariaPressed = String(isSelected);
   });
+};
+
+const syncToolControls = (): void => {
+  const isBrush = activeTool === "brush";
+  const activeSize = isBrush ? brushSizeValue : eraserSizeValue;
+
+  toolSection.dataset.activeTool = activeTool;
+  toolTitle.textContent = isBrush ? "Brush" : "Stroke Eraser";
+  toolSizeLabel.textContent = isBrush ? "Brush size" : "Eraser size";
+  toolSize.min = isBrush ? "2" : "8";
+  toolSize.max = isBrush ? "48" : "96";
+  toolSize.step = isBrush ? "1" : "2";
+  toolSize.value = String(activeSize);
+  toolSizeOutput.value = `${activeSize} px`;
+
+  toolButtons.forEach((button) => {
+    const isSelected = button.dataset.tool === activeTool;
+    button.classList.toggle("is-selected", isSelected);
+    button.ariaPressed = String(isSelected);
+  });
+
+  promptCanvas.updateTool(activeTool);
+  promptCanvas.updateEraserSize(eraserSizeValue);
 };
 
 const syncThemeLabel = (): void => {
@@ -562,7 +624,19 @@ brushColor.addEventListener("input", () => {
   saveColorOverrides(colorOverrides);
   syncBrush();
 });
-brushSize.addEventListener("input", syncBrush);
+toolSize.addEventListener("input", () => {
+  const nextSize = Number(toolSize.value);
+
+  if (activeTool === "brush") {
+    brushSizeValue = nextSize;
+    syncBrush();
+  } else {
+    eraserSizeValue = nextSize;
+    promptCanvas.updateEraserSize(eraserSizeValue);
+  }
+
+  toolSizeOutput.value = `${nextSize} px`;
+});
 brushOpacity.addEventListener("input", syncBrush);
 themeToggle.addEventListener("change", () => {
   activeTheme = themeToggle.checked ? "dark" : "light";
@@ -594,6 +668,19 @@ swatches.forEach((swatch) => {
     activeColorSlotId = slotId;
     brushColor.value = getColorSlotValue(activeColorSlotId);
     syncBrush();
+  });
+});
+
+toolButtons.forEach((button) => {
+  const tool = button.dataset.tool;
+
+  if (tool !== "brush" && tool !== "stroke-eraser") {
+    return;
+  }
+
+  button.addEventListener("click", () => {
+    activeTool = tool;
+    syncToolControls();
   });
 });
 
@@ -646,6 +733,7 @@ panelToggle.addEventListener("click", () => {
 });
 
 syncBrush();
+syncToolControls();
 syncThemeLabel();
 
 window.addEventListener("pagehide", () => promptCanvas.destroy(), { once: true });

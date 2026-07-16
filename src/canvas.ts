@@ -1,4 +1,8 @@
+import { distanceSquaredBetweenSegments } from "./geometry";
+
 export type ColorMode = "light" | "dark";
+
+export type CanvasTool = "brush" | "stroke-eraser";
 
 export type BrushColors = Record<ColorMode, string>;
 
@@ -26,7 +30,7 @@ export type CanvasSize = {
 };
 
 type CanvasCallbacks = {
-  onBrushSizeChange?: (steps: number) => void;
+  onToolSizeChange?: (steps: number) => void;
   onViewChange?: (view: ViewState) => void;
 };
 
@@ -35,6 +39,7 @@ type CanvasElements = {
   board: HTMLElement;
   background: HTMLCanvasElement;
   annotation: HTMLCanvasElement;
+  eraserCursor: HTMLElement;
 };
 
 type Stroke = {
@@ -56,16 +61,21 @@ export class PromptCanvas {
   private readonly board: HTMLElement;
   private readonly backgroundCanvas: HTMLCanvasElement;
   private readonly annotationCanvas: HTMLCanvasElement;
+  private readonly eraserCursor: HTMLElement;
   private readonly backgroundContext: CanvasRenderingContext2D;
   private readonly annotationContext: CanvasRenderingContext2D;
   private readonly resizeObserver: ResizeObserver;
   private readonly callbacks: CanvasCallbacks;
   private brush: BrushSettings;
+  private tool: CanvasTool = "brush";
+  private eraserSize = 32;
   private theme: CanvasTheme;
   private boardSize: CanvasSize = { ...DEFAULT_BOARD_SIZE };
   private hasInitializedView = false;
   private strokes: Stroke[] = [];
   private activeStroke: Stroke | null = null;
+  private activeEraserPoint: PointerPoint | null = null;
+  private isPointerOverCanvas = false;
   private pixelRatio = 1;
   private view: ViewState = {
     x: 0,
@@ -83,6 +93,7 @@ export class PromptCanvas {
     this.board = elements.board;
     this.backgroundCanvas = elements.background;
     this.annotationCanvas = elements.annotation;
+    this.eraserCursor = elements.eraserCursor;
     this.callbacks = callbacks;
     this.brush = cloneBrush(brush);
     this.theme = theme;
@@ -106,6 +117,8 @@ export class PromptCanvas {
     this.annotationCanvas.addEventListener("pointerup", this.handlePointerUp);
     this.annotationCanvas.addEventListener("pointercancel", this.handlePointerUp);
     this.annotationCanvas.addEventListener("lostpointercapture", this.handlePointerUp);
+    this.annotationCanvas.addEventListener("pointerenter", this.handlePointerEnter);
+    this.annotationCanvas.addEventListener("pointerleave", this.handlePointerLeave);
 
     this.configureCanvases();
     this.resetView();
@@ -113,6 +126,20 @@ export class PromptCanvas {
 
   updateBrush(brush: BrushSettings): void {
     this.brush = cloneBrush(brush);
+  }
+
+  updateTool(tool: CanvasTool): void {
+    this.tool = tool;
+    this.activeStroke = null;
+    this.activeEraserPoint = null;
+    this.annotationCanvas.dataset.tool = tool;
+    this.syncEraserCursorVisibility();
+  }
+
+  updateEraserSize(size: number): void {
+    this.eraserSize = Math.max(1, size);
+    this.eraserCursor.style.width = `${this.eraserSize}px`;
+    this.eraserCursor.style.height = `${this.eraserSize}px`;
   }
 
   updateTheme(theme: CanvasTheme): void {
@@ -131,6 +158,7 @@ export class PromptCanvas {
   clearAnnotations(): void {
     this.strokes = [];
     this.activeStroke = null;
+    this.activeEraserPoint = null;
     this.annotationContext.clearRect(
       0,
       0,
@@ -168,6 +196,8 @@ export class PromptCanvas {
     this.annotationCanvas.removeEventListener("pointerup", this.handlePointerUp);
     this.annotationCanvas.removeEventListener("pointercancel", this.handlePointerUp);
     this.annotationCanvas.removeEventListener("lostpointercapture", this.handlePointerUp);
+    this.annotationCanvas.removeEventListener("pointerenter", this.handlePointerEnter);
+    this.annotationCanvas.removeEventListener("pointerleave", this.handlePointerLeave);
   }
 
   private handleViewportResize(): void {
@@ -240,8 +270,22 @@ export class PromptCanvas {
       return;
     }
 
+    this.isPointerOverCanvas = true;
     this.annotationCanvas.setPointerCapture(event.pointerId);
     const point = this.getPoint(event);
+
+    if (this.tool === "stroke-eraser") {
+      this.activeEraserPoint = point;
+      this.updateEraserCursorPosition(point);
+      this.syncEraserCursorVisibility();
+
+      if (this.eraseStrokesAlong(point, point)) {
+        this.renderAnnotations();
+      }
+
+      event.preventDefault();
+      return;
+    }
 
     this.activeStroke = {
       points: [point],
@@ -253,10 +297,86 @@ export class PromptCanvas {
   };
 
   private handlePointerMove = (event: PointerEvent): void => {
-    if (!this.activeStroke) {
+    if (this.tool === "stroke-eraser") {
+      this.isPointerOverCanvas = this.isPointerInsideCanvas(event);
+      this.updateEraserCursorPosition(this.getPoint(event));
+      this.syncEraserCursorVisibility();
+    }
+
+    if (!this.activeStroke && !this.activeEraserPoint) {
       return;
     }
 
+    const points = this.getEventPoints(event);
+
+    if (this.activeEraserPoint) {
+      let previousPoint = this.activeEraserPoint;
+      let didErase = false;
+
+      for (const point of points) {
+        didErase = this.eraseStrokesAlong(previousPoint, point) || didErase;
+        previousPoint = point;
+      }
+
+      this.activeEraserPoint = previousPoint;
+
+      if (didErase) {
+        this.renderAnnotations();
+      }
+
+      event.preventDefault();
+      return;
+    }
+
+    const activeStroke = this.activeStroke;
+
+    if (!activeStroke) {
+      return;
+    }
+
+    for (const point of points) {
+      const previousPoint = activeStroke.points.at(-1);
+
+      if (!previousPoint) {
+        continue;
+      }
+
+      activeStroke.points.push(point);
+      this.drawLine(previousPoint, point, activeStroke.brush);
+    }
+
+    event.preventDefault();
+  };
+
+  private handlePointerUp = (event: PointerEvent): void => {
+    if (!this.activeStroke && !this.activeEraserPoint) {
+      return;
+    }
+
+    this.activeStroke = null;
+    this.activeEraserPoint = null;
+
+    if (this.annotationCanvas.hasPointerCapture(event.pointerId)) {
+      this.annotationCanvas.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  private handlePointerEnter = (event: PointerEvent): void => {
+    this.isPointerOverCanvas = true;
+
+    if (this.tool === "stroke-eraser") {
+      this.updateEraserCursorPosition(this.getPoint(event));
+    }
+
+    this.syncEraserCursorVisibility();
+  };
+
+  private handlePointerLeave = (): void => {
+    this.isPointerOverCanvas = false;
+    this.syncEraserCursorVisibility();
+  };
+
+  private getEventPoints(event: PointerEvent): PointerPoint[] {
     const coalescedEvents =
       typeof event.getCoalescedEvents === "function" ? event.getCoalescedEvents() : [];
     const points = coalescedEvents.map((coalescedEvent) => this.getPoint(coalescedEvent));
@@ -265,31 +385,8 @@ export class PromptCanvas {
       points.push(this.getPoint(event));
     }
 
-    for (const point of points) {
-      const previousPoint = this.activeStroke.points.at(-1);
-
-      if (!previousPoint) {
-        continue;
-      }
-
-      this.activeStroke.points.push(point);
-      this.drawLine(previousPoint, point, this.activeStroke.brush);
-    }
-
-    event.preventDefault();
-  };
-
-  private handlePointerUp = (event: PointerEvent): void => {
-    if (!this.activeStroke) {
-      return;
-    }
-
-    this.activeStroke = null;
-
-    if (this.annotationCanvas.hasPointerCapture(event.pointerId)) {
-      this.annotationCanvas.releasePointerCapture(event.pointerId);
-    }
-  };
+    return points;
+  }
 
   private getPoint(event: PointerEvent): PointerPoint {
     const rect = this.annotationCanvas.getBoundingClientRect();
@@ -315,7 +412,7 @@ export class PromptCanvas {
       const steps =
         Math.sign(deltaY) * Math.max(1, Math.round(Math.abs(deltaY) / 80));
 
-      this.callbacks.onBrushSizeChange?.(-steps);
+      this.callbacks.onToolSizeChange?.(-steps);
       return;
     }
 
@@ -381,6 +478,74 @@ export class PromptCanvas {
     this.strokes.forEach((stroke) => this.renderStroke(stroke));
   }
 
+  private eraseStrokesAlong(from: PointerPoint, to: PointerPoint): boolean {
+    const eraserRadius = this.eraserSize / 2;
+    const remainingStrokes = this.strokes.filter(
+      (stroke) => !this.strokeIntersectsEraser(stroke, from, to, eraserRadius),
+    );
+
+    if (remainingStrokes.length === this.strokes.length) {
+      return false;
+    }
+
+    this.strokes = remainingStrokes;
+    return true;
+  }
+
+  private strokeIntersectsEraser(
+    stroke: Stroke,
+    eraserStart: PointerPoint,
+    eraserEnd: PointerPoint,
+    eraserRadius: number,
+  ): boolean {
+    const firstPoint = stroke.points[0];
+
+    if (!firstPoint) {
+      return false;
+    }
+
+    const firstDotHitRadius =
+      eraserRadius + this.getLogicalStrokeWidth(firstPoint.pressure, stroke.brush) / 2;
+
+    if (
+      distanceSquaredBetweenSegments(
+        eraserStart,
+        eraserEnd,
+        firstPoint,
+        firstPoint,
+      ) <=
+      firstDotHitRadius * firstDotHitRadius
+    ) {
+      return true;
+    }
+
+    if (stroke.points.length === 1) {
+      return false;
+    }
+
+    for (let index = 1; index < stroke.points.length; index += 1) {
+      const strokeStart = stroke.points[index - 1];
+      const strokeEnd = stroke.points[index];
+      const averagePressure = (strokeStart.pressure + strokeEnd.pressure) / 2;
+      const hitRadius =
+        eraserRadius + this.getLogicalStrokeWidth(averagePressure, stroke.brush) / 2;
+
+      if (
+        distanceSquaredBetweenSegments(
+          eraserStart,
+          eraserEnd,
+          strokeStart,
+          strokeEnd,
+        ) <=
+        hitRadius * hitRadius
+      ) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   private renderStroke(stroke: Stroke): void {
     const firstPoint = stroke.points[0];
 
@@ -435,8 +600,31 @@ export class PromptCanvas {
   }
 
   private getStrokeWidth(pressure: number, brush: BrushSettings): number {
+    return this.getLogicalStrokeWidth(pressure, brush) * this.pixelRatio;
+  }
+
+  private getLogicalStrokeWidth(pressure: number, brush: BrushSettings): number {
     const pressureScale = 0.65 + pressure * 0.7;
-    return brush.size * this.pixelRatio * pressureScale;
+    return brush.size * pressureScale;
+  }
+
+  private updateEraserCursorPosition(point: PointerPoint): void {
+    this.eraserCursor.style.transform = `translate3d(${point.x}px, ${point.y}px, 0) translate(-50%, -50%)`;
+  }
+
+  private isPointerInsideCanvas(event: PointerEvent): boolean {
+    const rect = this.annotationCanvas.getBoundingClientRect();
+    return (
+      event.clientX >= rect.left &&
+      event.clientX <= rect.right &&
+      event.clientY >= rect.top &&
+      event.clientY <= rect.bottom
+    );
+  }
+
+  private syncEraserCursorVisibility(): void {
+    this.eraserCursor.hidden =
+      this.tool !== "stroke-eraser" || !this.isPointerOverCanvas;
   }
 }
 

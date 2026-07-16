@@ -24,3 +24,4 @@
 
 2026-07-07 | [Initial Demo](archive/20260707_Initial_Demo.md) | First runnable Vite/TypeScript demo with a drawable canvas, compact controls, theme switching, canvas sizing dialog, and brush-size wheel control.
 2026-07-16 | [Theme-Aware Brush Colors](archive/20260716_Theme_Aware_Brush_Colors.md) | Added stable theme-aware palette persistence, retained-stroke recoloring, trackpad canvas navigation, and stylus-safe zoom behavior.
+2026-07-16 | [Stroke Eraser](archive/20260716_Stroke_Eraser.md) | Added pressure-aware whole-stroke erasing with continuous swept hit-testing, independent tool sizing, and background-safe replay.
