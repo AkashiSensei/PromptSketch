@@ -55,6 +55,12 @@ type CanvasElements = {
   eraserCursor: HTMLElement;
 };
 
+type BaseImage = {
+  source: CanvasImageSource;
+  width: number;
+  height: number;
+};
+
 type Stroke = {
   type: "stroke";
   points: PointerPoint[];
@@ -103,6 +109,7 @@ export class PromptCanvas {
   private eraserSize = 32;
   private theme: CanvasTheme;
   private boardSize: CanvasSize = { ...DEFAULT_BOARD_SIZE };
+  private baseImage: BaseImage | null = null;
   private hasInitializedView = false;
   private annotations: Annotation[] = [];
   private activeStroke: Stroke | null = null;
@@ -199,10 +206,90 @@ export class PromptCanvas {
   }
 
   newCanvas(size: CanvasSize): void {
+    this.releaseBaseImage();
     this.clearAnnotations();
     this.boardSize = normalizeCanvasSize(size);
     this.configureCanvases();
+    this.paintBackground();
+    this.renderAnnotations();
     this.resetView();
+  }
+
+  setBaseImage(source: CanvasImageSource, size: CanvasSize): CanvasSize {
+    const nextSize = normalizeImageSize(size);
+
+    this.releaseBaseImage();
+    this.baseImage = {
+      source,
+      width: size.width,
+      height: size.height,
+    };
+    this.clearAnnotations();
+    this.boardSize = nextSize;
+    this.configureCanvases();
+    this.paintBackground();
+    this.renderAnnotations();
+    this.resetView();
+
+    return { ...nextSize };
+  }
+
+  toPngBlob(): Promise<Blob> {
+    const outputCanvas = document.createElement("canvas");
+    const outputContext = outputCanvas.getContext("2d");
+
+    if (!outputContext) {
+      return Promise.reject(new Error("Canvas export is not supported in this browser."));
+    }
+
+    outputCanvas.width = this.boardSize.width;
+    outputCanvas.height = this.boardSize.height;
+
+    if (this.baseImage) {
+      outputContext.drawImage(
+        this.baseImage.source,
+        0,
+        0,
+        this.baseImage.width,
+        this.baseImage.height,
+        0,
+        0,
+        this.boardSize.width,
+        this.boardSize.height,
+      );
+    } else {
+      outputContext.fillStyle = this.theme.background;
+      outputContext.fillRect(0, 0, this.boardSize.width, this.boardSize.height);
+    }
+
+    this.renderAnnotations(false);
+
+    try {
+      outputContext.drawImage(
+        this.annotationCanvas,
+        0,
+        0,
+        this.annotationCanvas.width,
+        this.annotationCanvas.height,
+        0,
+        0,
+        this.boardSize.width,
+        this.boardSize.height,
+      );
+    } finally {
+      this.renderAnnotations();
+    }
+
+    return new Promise((resolve, reject) => {
+      outputCanvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+          return;
+        }
+
+        reject(new Error("The canvas could not be encoded as a PNG."));
+      }, "image/png");
+    });
   }
 
   clearAnnotations(): void {
@@ -240,6 +327,7 @@ export class PromptCanvas {
   }
 
   destroy(): void {
+    this.releaseBaseImage();
     this.resizeObserver.disconnect();
     this.viewport.removeEventListener("wheel", this.handleWheel);
     this.annotationCanvas.removeEventListener("pointerdown", this.handlePointerDown);
@@ -295,6 +383,22 @@ export class PromptCanvas {
     const { width, height } = this.backgroundCanvas;
 
     this.backgroundContext.clearRect(0, 0, width, height);
+
+    if (this.baseImage) {
+      this.backgroundContext.drawImage(
+        this.baseImage.source,
+        0,
+        0,
+        this.baseImage.width,
+        this.baseImage.height,
+        0,
+        0,
+        width,
+        height,
+      );
+      return;
+    }
+
     this.backgroundContext.fillStyle = this.theme.background;
     this.backgroundContext.fillRect(0, 0, width, height);
 
@@ -566,7 +670,7 @@ export class PromptCanvas {
     this.callbacks.onViewChange?.({ ...this.view });
   }
 
-  private renderAnnotations(): void {
+  private renderAnnotations(includeActive = true): void {
     this.annotationContext.clearRect(
       0,
       0,
@@ -575,6 +679,10 @@ export class PromptCanvas {
     );
 
     this.annotations.forEach((annotation) => {
+      if (!includeActive && annotation === this.activeStroke) {
+        return;
+      }
+
       if (annotation.type === "stroke") {
         this.renderStroke(annotation);
       } else {
@@ -582,7 +690,7 @@ export class PromptCanvas {
       }
     });
 
-    if (this.activeShape) {
+    if (includeActive && this.activeShape) {
       this.renderShape({
         type: "shape",
         bounds: this.getActiveShapeBounds(this.activeShape),
@@ -816,6 +924,17 @@ export class PromptCanvas {
     this.eraserCursor.hidden =
       this.tool !== "stroke-eraser" || !this.isPointerOverCanvas;
   }
+
+  private releaseBaseImage(): void {
+    if (
+      typeof ImageBitmap !== "undefined" &&
+      this.baseImage?.source instanceof ImageBitmap
+    ) {
+      this.baseImage.source.close();
+    }
+
+    this.baseImage = null;
+  }
 }
 
 type PointerPoint = {
@@ -844,3 +963,21 @@ const normalizeCanvasSize = (size: CanvasSize): CanvasSize => ({
   width: Math.round(clamp(size.width, MIN_BOARD_SIZE, MAX_BOARD_SIZE)),
   height: Math.round(clamp(size.height, MIN_BOARD_SIZE, MAX_BOARD_SIZE)),
 });
+
+const normalizeImageSize = (size: CanvasSize): CanvasSize => {
+  if (
+    !Number.isFinite(size.width) ||
+    !Number.isFinite(size.height) ||
+    size.width <= 0 ||
+    size.height <= 0
+  ) {
+    throw new Error("The clipboard image has invalid dimensions.");
+  }
+
+  const scale = Math.min(1, MAX_BOARD_SIZE / size.width, MAX_BOARD_SIZE / size.height);
+
+  return {
+    width: Math.max(1, Math.round(size.width * scale)),
+    height: Math.max(1, Math.round(size.height * scale)),
+  };
+};

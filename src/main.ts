@@ -136,6 +136,29 @@ app.innerHTML = `
           </label>
         </section>
 
+        <section class="panel-section io-section" id="io-section" aria-labelledby="io-section-title" aria-busy="false">
+          <header class="panel-header">
+            <p class="eyebrow">Input / Output</p>
+            <h2 id="io-section-title">Image</h2>
+          </header>
+
+          <div class="io-actions">
+            <button class="io-button" id="paste-image" type="button">
+              <span>Paste</span>
+              <kbd data-shortcut="paste">⌘V</kbd>
+            </button>
+            <button class="io-button" id="copy-image" type="button">
+              <span>Copy</span>
+              <kbd data-shortcut="copy">⌘C</kbd>
+            </button>
+            <button class="io-button" id="save-image" type="button">
+              <span>Save</span>
+              <kbd data-shortcut="save">⌘S</kbd>
+            </button>
+          </div>
+          <p class="io-status" id="io-status" data-state="idle" aria-live="polite">Ready</p>
+        </section>
+
         <section class="panel-section" aria-labelledby="settings-section-title">
           <header class="panel-header">
             <p class="eyebrow">Settings</p>
@@ -229,6 +252,11 @@ const resetColorsButton = app.querySelector<HTMLButtonElement>("#reset-colors");
 const themeToggle = app.querySelector<HTMLInputElement>("#theme-toggle");
 const themeOutput = app.querySelector<HTMLOutputElement>("#theme-output");
 const resetViewButton = app.querySelector<HTMLButtonElement>("#reset-view");
+const ioSection = app.querySelector<HTMLElement>("#io-section");
+const pasteImageButton = app.querySelector<HTMLButtonElement>("#paste-image");
+const copyImageButton = app.querySelector<HTMLButtonElement>("#copy-image");
+const saveImageButton = app.querySelector<HTMLButtonElement>("#save-image");
+const ioStatus = app.querySelector<HTMLElement>("#io-status");
 const newCanvasDialog = app.querySelector<HTMLDialogElement>("#new-canvas-dialog");
 const canvasRatio = app.querySelector<HTMLSelectElement>("#canvas-ratio");
 const canvasWidth = app.querySelector<HTMLInputElement>("#canvas-width");
@@ -266,6 +294,11 @@ if (
   !themeToggle ||
   !themeOutput ||
   !resetViewButton ||
+  !ioSection ||
+  !pasteImageButton ||
+  !copyImageButton ||
+  !saveImageButton ||
+  !ioStatus ||
   !newCanvasDialog ||
   !canvasRatio ||
   !canvasWidth ||
@@ -381,6 +414,263 @@ const promptCanvas = new PromptCanvas(
     onToolSizeChange: adjustToolSize,
   },
 );
+
+type IoStatusState = "idle" | "info" | "success" | "error";
+
+type DecodedImage = (ImageBitmap | HTMLImageElement) & {
+  width: number;
+  height: number;
+};
+
+type SaveFileHandle = {
+  createWritable: () => Promise<{
+    write: (data: Blob) => Promise<void>;
+    close: () => Promise<void>;
+  }>;
+};
+
+type SaveFilePicker = (options: {
+  suggestedName: string;
+  types: Array<{
+    description: string;
+    accept: Record<string, string[]>;
+  }>;
+}) => Promise<SaveFileHandle>;
+
+let isIoBusy = false;
+
+const setIoStatus = (message: string, state: IoStatusState = "info"): void => {
+  ioStatus.textContent = message;
+  ioStatus.dataset.state = state;
+};
+
+const setIoBusy = (isBusy: boolean): void => {
+  isIoBusy = isBusy;
+  ioSection.ariaBusy = String(isBusy);
+  pasteImageButton.disabled = isBusy;
+  copyImageButton.disabled = isBusy;
+  saveImageButton.disabled = isBusy;
+};
+
+const getErrorMessage = (error: unknown): string => {
+  if (error instanceof DOMException && error.name === "NotAllowedError") {
+    return "Clipboard or file access was not allowed.";
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return "The image operation could not be completed.";
+};
+
+const runIoAction = async (
+  progressMessage: string,
+  action: () => Promise<void>,
+): Promise<void> => {
+  if (isIoBusy) {
+    return;
+  }
+
+  setIoBusy(true);
+  setIoStatus(progressMessage, "info");
+
+  try {
+    await action();
+  } catch (error) {
+    setIoStatus(getErrorMessage(error), "error");
+  } finally {
+    setIoBusy(false);
+  }
+};
+
+const decodeImageElement = (blob: Blob): Promise<HTMLImageElement> =>
+  new Promise((resolve, reject) => {
+    const objectUrl = URL.createObjectURL(blob);
+    const image = new Image();
+
+    image.addEventListener(
+      "load",
+      () => {
+        URL.revokeObjectURL(objectUrl);
+        resolve(image);
+      },
+      { once: true },
+    );
+    image.addEventListener(
+      "error",
+      () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("The clipboard image could not be decoded."));
+      },
+      { once: true },
+    );
+    image.src = objectUrl;
+  });
+
+const decodeImage = async (blob: Blob): Promise<DecodedImage> => {
+  if (typeof createImageBitmap === "function") {
+    try {
+      return await createImageBitmap(blob);
+    } catch {
+      // Some browsers decode clipboard formats more reliably through an image element.
+    }
+  }
+
+  return decodeImageElement(blob);
+};
+
+const pasteImageBlob = async (blob: Blob): Promise<void> => {
+  const image = await decodeImage(blob);
+
+  try {
+    const size = promptCanvas.setBaseImage(image, {
+      width: image.width,
+      height: image.height,
+    });
+    setIoStatus(`Pasted ${size.width} × ${size.height} image`, "success");
+  } catch (error) {
+    if (typeof ImageBitmap !== "undefined" && image instanceof ImageBitmap) {
+      image.close();
+    }
+
+    throw error;
+  }
+};
+
+const pasteFromClipboard = async (): Promise<void> => {
+  if (!navigator.clipboard || typeof navigator.clipboard.read !== "function") {
+    throw new Error("Clipboard reading is unavailable. Use Cmd/Ctrl+V instead.");
+  }
+
+  const clipboardItems = await navigator.clipboard.read();
+
+  for (const item of clipboardItems) {
+    const imageType = item.types.find((type) => type.startsWith("image/"));
+
+    if (imageType) {
+      await pasteImageBlob(await item.getType(imageType));
+      return;
+    }
+  }
+
+  throw new Error("The clipboard does not contain an image.");
+};
+
+const copyImage = async (): Promise<void> => {
+  if (
+    !navigator.clipboard ||
+    typeof navigator.clipboard.write !== "function" ||
+    typeof ClipboardItem === "undefined"
+  ) {
+    throw new Error("Copying images is not supported in this browser.");
+  }
+
+  const pngBlob = promptCanvas.toPngBlob();
+  const clipboardItem = new ClipboardItem({ "image/png": pngBlob });
+
+  await navigator.clipboard.write([clipboardItem]);
+  setIoStatus("Copied PNG to the clipboard", "success");
+};
+
+const createPngFilename = (): string => {
+  const now = new Date();
+  const pad = (value: number): string => String(value).padStart(2, "0");
+
+  return `promptsketch-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.png`;
+};
+
+const getSaveFilePicker = (): SaveFilePicker | undefined =>
+  (window as Window & { showSaveFilePicker?: SaveFilePicker }).showSaveFilePicker?.bind(
+    window,
+  );
+
+const downloadPng = (blob: Blob, filename: string): void => {
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = objectUrl;
+  link.download = filename;
+  link.hidden = true;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+};
+
+const saveImage = async (): Promise<void> => {
+  const filename = createPngFilename();
+  const showSaveFilePicker = getSaveFilePicker();
+
+  if (showSaveFilePicker) {
+    let fileHandle: SaveFileHandle;
+
+    try {
+      fileHandle = await showSaveFilePicker({
+        suggestedName: filename,
+        types: [
+          {
+            description: "PNG image",
+            accept: { "image/png": [".png"] },
+          },
+        ],
+      });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setIoStatus("Save canceled", "info");
+        return;
+      }
+
+      throw error;
+    }
+
+    const pngBlob = await promptCanvas.toPngBlob();
+    const writable = await fileHandle.createWritable();
+
+    await writable.write(pngBlob);
+    await writable.close();
+    setIoStatus(`Saved ${filename}`, "success");
+    return;
+  }
+
+  downloadPng(await promptCanvas.toPngBlob(), filename);
+  setIoStatus(`Downloaded ${filename}`, "success");
+};
+
+const isEditableTarget = (target: EventTarget | null): boolean => {
+  const element = target instanceof Element ? target : document.activeElement;
+
+  return Boolean(
+    element?.closest(
+      "input, textarea, select, [contenteditable]:not([contenteditable='false'])",
+    ),
+  );
+};
+
+const hasSelectedText = (): boolean => {
+  const selection = window.getSelection();
+  return Boolean(selection && !selection.isCollapsed && selection.toString());
+};
+
+const shouldPreserveNativeEditing = (target: EventTarget | null): boolean =>
+  newCanvasDialog.open || isEditableTarget(target);
+
+const syncShortcutHints = (): void => {
+  const modifier = /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "⌘" : "Ctrl+";
+  const shortcuts = {
+    paste: `${modifier}V`,
+    copy: `${modifier}C`,
+    save: `${modifier}S`,
+  };
+
+  app.querySelectorAll<HTMLElement>("[data-shortcut]").forEach((hint) => {
+    const shortcut = hint.dataset.shortcut as keyof typeof shortcuts | undefined;
+
+    if (shortcut) {
+      hint.textContent = shortcuts[shortcut];
+    }
+  });
+};
 
 const syncBrush = (): void => {
   brushOpacityOutput.value = `${brushOpacity.value}%`;
@@ -540,6 +830,66 @@ canvasHeight.addEventListener("input", () => {
   canvasRatio.value = "custom";
 });
 
+pasteImageButton.addEventListener("click", () => {
+  void runIoAction("Reading clipboard…", pasteFromClipboard);
+});
+
+copyImageButton.addEventListener("click", () => {
+  void runIoAction("Preparing PNG…", copyImage);
+});
+
+saveImageButton.addEventListener("click", () => {
+  void runIoAction("Opening save dialog…", saveImage);
+});
+
+document.addEventListener("paste", (event) => {
+  if (isIoBusy || shouldPreserveNativeEditing(event.target)) {
+    return;
+  }
+
+  const imageFile = Array.from(event.clipboardData?.items ?? [])
+    .find((item) => item.kind === "file" && item.type.startsWith("image/"))
+    ?.getAsFile();
+
+  if (!imageFile) {
+    setIoStatus("The clipboard does not contain an image.", "error");
+    return;
+  }
+
+  event.preventDefault();
+  void runIoAction("Pasting image…", () => pasteImageBlob(imageFile));
+});
+
+document.addEventListener("copy", (event) => {
+  if (
+    isIoBusy ||
+    shouldPreserveNativeEditing(event.target) ||
+    hasSelectedText()
+  ) {
+    return;
+  }
+
+  event.preventDefault();
+  void runIoAction("Preparing PNG…", copyImage);
+});
+
+document.addEventListener("keydown", (event) => {
+  const usesPlatformModifier = event.metaKey || event.ctrlKey;
+
+  if (
+    !usesPlatformModifier ||
+    event.altKey ||
+    event.shiftKey ||
+    event.key.toLowerCase() !== "s" ||
+    shouldPreserveNativeEditing(event.target)
+  ) {
+    return;
+  }
+
+  event.preventDefault();
+  void runIoAction("Opening save dialog…", saveImage);
+});
+
 swatches.forEach((swatch) => {
   const slotId = swatch.dataset.slot;
 
@@ -605,6 +955,7 @@ createNewCanvasButton.addEventListener("click", () => {
   canvasWidth.value = String(width);
   canvasHeight.value = String(height);
   promptCanvas.newCanvas({ width, height });
+  setIoStatus(`Created ${width} × ${height} blank canvas`, "success");
   newCanvasDialog.close();
 });
 
@@ -621,5 +972,6 @@ syncBrush();
 syncShape();
 syncToolControls();
 syncThemeLabel();
+syncShortcutHints();
 
 window.addEventListener("pagehide", () => promptCanvas.destroy(), { once: true });

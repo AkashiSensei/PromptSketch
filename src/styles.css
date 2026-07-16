@@ -248,6 +248,7 @@ h2 {
 .clear-button:focus-visible,
 .primary-button:focus-visible,
 .secondary-button:focus-visible,
+.io-button:focus-visible,
 .tool-button:focus-visible,
 .swatch:focus-visible,
 select:focus-visible,
@@ -276,6 +277,62 @@ input:focus-visible {
 .panel-section:last-child {
   padding-bottom: 0;
   border-bottom: 0;
+}
+
+.io-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.io-button {
+  display: grid;
+  min-width: 0;
+  min-height: 46px;
+  place-content: center;
+  gap: 2px;
+  padding: 5px 3px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--control-background);
+  color: var(--ink);
+  font-size: 0.76rem;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.io-button:hover {
+  border-color: var(--line-strong);
+  background: var(--control-background-hover);
+}
+
+.io-button:disabled {
+  cursor: progress;
+  opacity: 0.55;
+}
+
+.io-button kbd {
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 0.62rem;
+  font-weight: 680;
+}
+
+.io-status {
+  min-height: 1.1em;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 620;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.io-status[data-state="success"] {
+  color: var(--accent-strong);
+}
+
+.io-status[data-state="error"] {
+  color: var(--danger);
 }
 
 .panel-section[hidden] {
@@ -631,6 +688,7 @@ input[type="range"] {
 
   .panel-header,
   .panel-section,
+  .io-actions,
   .swatch-row,
   .switch-control,
   .dimension-grid,

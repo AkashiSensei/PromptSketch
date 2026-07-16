@@ -27,3 +27,4 @@
 2026-07-16 | [Theme-Aware Brush Colors](archive/20260716_Theme_Aware_Brush_Colors.md) | Added stable theme-aware palette persistence, retained-stroke recoloring, trackpad canvas navigation, and stylus-safe zoom behavior.
 2026-07-16 | [Stroke Eraser](archive/20260716_Stroke_Eraser.md) | Added pressure-aware whole-stroke erasing with continuous swept hit-testing, independent tool sizing, and background-safe replay.
 2026-07-16 | [Shape Tools](archive/20260716_Shape_Tools.md) | Added rectangle, ellipse, and rounded-rectangle tools with outline/solid modes, shared colors, stable controls, and whole-shape erasing.
+2026-07-16 | [Input Output Enhancements](archive/20260716_Input_Output_Enhancements.md) | Added clipboard image paste, composed PNG copy, native/fallback save flows, protected shortcuts, and accessible operation feedback.
