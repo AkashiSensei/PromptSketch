@@ -1,7 +1,7 @@
 .PHONY: run build install
 
 run: node_modules/.package-lock.json
-	npm run dev -- --port 5173
+	npm run dev
 
 build: node_modules/.package-lock.json
 	npm run build
