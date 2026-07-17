@@ -29,3 +29,4 @@
 2026-07-16 | [Shape Tools](archive/20260716_Shape_Tools.md) | Added rectangle, ellipse, and rounded-rectangle tools with outline/solid modes, shared colors, stable controls, and whole-shape erasing.
 2026-07-16 | [Input Output Enhancements](archive/20260716_Input_Output_Enhancements.md) | Added clipboard image paste, composed PNG copy, native/fallback save flows, protected shortcuts, and accessible operation feedback.
 2026-07-17 | [Undo, Redo, and Shortcuts](archive/20260717_Undo_Redo_And_Shortcuts.md) | Added transaction-safe annotation history, discoverable tool/color/canvas shortcuts, collapsed-rail actions, clear confirmation, and workspace-fit canvas sizing.
+2026-07-17 | [GitHub Pages Deployment Setup](archive/20260717_GitHub_Pages_Deployment_Setup.md) | Added a secure GitHub Actions deployment pipeline, project-path Vite build configuration, and GitHub Pages repository setup.
