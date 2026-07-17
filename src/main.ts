@@ -18,6 +18,13 @@ import {
   type ColorSlotId,
   type ThemeMode,
 } from "./colors";
+import {
+  CANVAS_ACTION_SHORTCUTS,
+  COLOR_SHORTCUTS,
+  getColorSlotShortcut,
+  getDrawingShortcut,
+  getShapeShortcut,
+} from "./shortcuts";
 import "./styles.css";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -43,6 +50,43 @@ app.innerHTML = `
         Hide
       </button>
 
+      <div
+        class="panel-rail-status"
+        id="panel-rail-status"
+        aria-live="polite"
+        aria-label="Current tool: Brush. Current color: Black / White."
+      >
+        <kbd class="panel-rail-tool" id="panel-rail-tool" aria-hidden="true">B</kbd>
+        <span class="panel-rail-color" id="panel-rail-color" aria-hidden="true"></span>
+        <span class="panel-rail-actions" role="group" aria-label="Canvas actions">
+          <button
+            class="panel-rail-action"
+            id="panel-rail-new-canvas"
+            type="button"
+            aria-label="New canvas"
+            aria-keyshortcuts="${CANVAS_ACTION_SHORTCUTS.newCanvas.ariaKeyShortcuts}"
+            title="New canvas"
+          >
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="M2.75 5.25h9.5v9.5h-9.5z" />
+              <path d="M14.25 2.75v5M11.75 5.25h5" />
+            </svg>
+          </button>
+          <button
+            class="panel-rail-action panel-rail-action--danger"
+            id="panel-rail-clear"
+            type="button"
+            aria-label="Clear annotations"
+            aria-keyshortcuts="${CANVAS_ACTION_SHORTCUTS.clearAnnotations.ariaKeyShortcuts}"
+            title="Clear annotations"
+          >
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="M3.75 5.25h10.5M7 2.75h4M5 5.25l.65 10h6.7l.65-10M7.25 7.75v5M10.75 7.75v5" />
+            </svg>
+          </button>
+        </span>
+      </div>
+
       <div class="panel-content">
         <section class="panel-section color-section" id="color-section" data-disabled="false" aria-labelledby="color-section-title">
           <header class="panel-header">
@@ -62,9 +106,10 @@ app.innerHTML = `
                   class="swatch${index === 0 ? " is-selected" : ""}"
                   type="button"
                   data-slot="${slot.id}"
-                  aria-label="${slot.label} color slot"
+                  aria-label="${slot.label} color slot — ${COLOR_SHORTCUTS[slot.id]}"
+                  aria-keyshortcuts="${COLOR_SHORTCUTS[slot.id]}"
                   aria-pressed="${index === 0}"
-                ></button>
+                ><kbd>${COLOR_SHORTCUTS[slot.id]}</kbd></button>
               `,
             ).join("")}
           </div>
@@ -83,31 +128,34 @@ app.innerHTML = `
               type="button"
               data-tool="brush"
               aria-pressed="true"
+              aria-keyshortcuts="B"
               title="Draw annotation strokes"
-            >Brush</button>
+            ><span>Brush</span><kbd>B</kbd></button>
             <button
               class="tool-button"
               type="button"
               data-tool="shape"
               aria-pressed="false"
+              aria-keyshortcuts="R O U"
               title="Draw geometric shapes"
-            >Shape</button>
+            ><span>Shape</span><kbd id="shape-tool-shortcut">R</kbd></button>
             <button
               class="tool-button"
               type="button"
               data-tool="stroke-eraser"
               aria-label="Stroke Eraser — erase whole annotations"
+              aria-keyshortcuts="E"
               aria-pressed="false"
               title="Erase whole annotations"
-            >Eraser</button>
+            ><span>Eraser</span><kbd>E</kbd></button>
           </div>
 
           <label class="control shape-only" for="shape-kind">
             <span>Shape</span>
             <select id="shape-kind">
-              <option value="rectangle">Rectangle</option>
-              <option value="ellipse">Ellipse / circle</option>
-              <option value="rounded-rectangle">Rounded rectangle</option>
+              <option value="rectangle">Rectangle (R)</option>
+              <option value="ellipse">Ellipse / circle (O)</option>
+              <option value="rounded-rectangle">Rounded rectangle (U)</option>
             </select>
           </label>
 
@@ -134,6 +182,36 @@ app.innerHTML = `
             </span>
             <input id="brush-opacity" type="range" min="10" max="100" step="5" value="100" />
           </label>
+        </section>
+
+        <section class="panel-section history-section" aria-labelledby="history-section-title">
+          <header class="panel-header">
+            <p class="eyebrow">History</p>
+            <h2 id="history-section-title">Edit</h2>
+          </header>
+
+          <div class="history-actions">
+            <button
+              class="history-button"
+              id="undo-action"
+              type="button"
+              aria-keyshortcuts="Meta+Z Control+Z"
+              disabled
+            >
+              <span>Undo</span>
+              <kbd data-shortcut="undo">⌘Z</kbd>
+            </button>
+            <button
+              class="history-button"
+              id="redo-action"
+              type="button"
+              aria-keyshortcuts="Meta+Shift+Z Control+Shift+Z Control+Y"
+              disabled
+            >
+              <span>Redo</span>
+              <kbd data-shortcut="redo">⇧⌘Z</kbd>
+            </button>
+          </div>
         </section>
 
         <section class="panel-section io-section" id="io-section" aria-labelledby="io-section-title" aria-busy="false">
@@ -173,7 +251,15 @@ app.innerHTML = `
             <input id="theme-toggle" type="checkbox" />
           </label>
 
-          <button class="secondary-button" id="reset-view" type="button">Reset view</button>
+          <button
+            class="secondary-button shortcut-action-button"
+            id="reset-view"
+            type="button"
+            aria-keyshortcuts="${CANVAS_ACTION_SHORTCUTS.resetView.ariaKeyShortcuts}"
+          >
+            <span>Reset view</span>
+            <kbd data-shortcut="resetView">0</kbd>
+          </button>
         </section>
 
         <section class="panel-section" aria-labelledby="new-section-title">
@@ -181,8 +267,24 @@ app.innerHTML = `
             <p class="eyebrow">New</p>
             <h2 id="new-section-title">Canvas</h2>
           </header>
-          <button class="primary-button" id="open-new-canvas" type="button">New canvas</button>
-          <button class="clear-button" id="clear-canvas" type="button">Clear annotations</button>
+          <button
+            class="primary-button shortcut-action-button"
+            id="open-new-canvas"
+            type="button"
+            aria-keyshortcuts="${CANVAS_ACTION_SHORTCUTS.newCanvas.ariaKeyShortcuts}"
+          >
+            <span>New canvas</span>
+            <kbd data-shortcut="newCanvas">⌘N</kbd>
+          </button>
+          <button
+            class="clear-button shortcut-action-button"
+            id="clear-canvas"
+            type="button"
+            aria-keyshortcuts="${CANVAS_ACTION_SHORTCUTS.clearAnnotations.ariaKeyShortcuts}"
+          >
+            <span>Clear annotations</span>
+            <kbd data-shortcut="clearAnnotations">⇧⌫</kbd>
+          </button>
         </section>
       </div>
     </aside>
@@ -206,6 +308,19 @@ app.innerHTML = `
           </select>
         </label>
 
+        <button
+          class="secondary-button fit-workspace-button"
+          id="fit-canvas-to-workspace"
+          type="button"
+          title="Match the visible drawing area at 100% zoom"
+        >
+          <svg viewBox="0 0 18 18" aria-hidden="true">
+            <path d="M3.25 6V3.25H6M12 3.25h2.75V6M14.75 12v2.75H12M6 14.75H3.25V12" />
+            <rect x="5.75" y="5.75" width="6.5" height="6.5" rx="1" />
+          </svg>
+          <span>Fit workspace</span>
+        </button>
+
         <div class="dimension-grid">
           <label class="control" for="canvas-width">
             <span>Width</span>
@@ -224,6 +339,27 @@ app.innerHTML = `
         </div>
       </form>
     </dialog>
+
+    <dialog class="canvas-dialog" id="clear-confirm-dialog" aria-labelledby="clear-confirm-dialog-title">
+      <form class="dialog-panel" method="dialog">
+        <header class="dialog-header">
+          <p class="eyebrow">Clear</p>
+          <h2 id="clear-confirm-dialog-title">Clear all annotations?</h2>
+        </header>
+
+        <p class="dialog-copy">
+          Every stroke and shape will be removed. Your background image stays in place,
+          and you can undo this action afterward.
+        </p>
+
+        <div class="dialog-actions">
+          <button class="secondary-button" id="cancel-clear" type="button">Cancel</button>
+          <button class="dialog-danger-button" id="confirm-clear" type="button">
+            Clear annotations
+          </button>
+        </div>
+      </form>
+    </dialog>
   </main>
 `;
 
@@ -234,8 +370,16 @@ const backgroundCanvas = app.querySelector<HTMLCanvasElement>("#background-canva
 const annotationCanvas = app.querySelector<HTMLCanvasElement>("#annotation-canvas");
 const eraserCursor = app.querySelector<HTMLElement>("#eraser-cursor");
 const panelToggle = app.querySelector<HTMLButtonElement>("#panel-toggle");
+const panelRailStatus = app.querySelector<HTMLElement>("#panel-rail-status");
+const panelRailTool = app.querySelector<HTMLElement>("#panel-rail-tool");
+const panelRailColor = app.querySelector<HTMLElement>("#panel-rail-color");
+const railNewCanvasButton = app.querySelector<HTMLButtonElement>(
+  "#panel-rail-new-canvas",
+);
+const railClearButton = app.querySelector<HTMLButtonElement>("#panel-rail-clear");
 const toolSection = app.querySelector<HTMLElement>("#tool-section");
 const toolTitle = app.querySelector<HTMLElement>("#tool-section-title");
+const shapeToolShortcut = app.querySelector<HTMLElement>("#shape-tool-shortcut");
 const shapeKindInput = app.querySelector<HTMLSelectElement>("#shape-kind");
 const shapeFillEnabled = app.querySelector<HTMLInputElement>("#shape-fill-enabled");
 const shapeFillOutput = app.querySelector<HTMLOutputElement>("#shape-fill-output");
@@ -252,19 +396,29 @@ const resetColorsButton = app.querySelector<HTMLButtonElement>("#reset-colors");
 const themeToggle = app.querySelector<HTMLInputElement>("#theme-toggle");
 const themeOutput = app.querySelector<HTMLOutputElement>("#theme-output");
 const resetViewButton = app.querySelector<HTMLButtonElement>("#reset-view");
+const undoButton = app.querySelector<HTMLButtonElement>("#undo-action");
+const redoButton = app.querySelector<HTMLButtonElement>("#redo-action");
 const ioSection = app.querySelector<HTMLElement>("#io-section");
 const pasteImageButton = app.querySelector<HTMLButtonElement>("#paste-image");
 const copyImageButton = app.querySelector<HTMLButtonElement>("#copy-image");
 const saveImageButton = app.querySelector<HTMLButtonElement>("#save-image");
 const ioStatus = app.querySelector<HTMLElement>("#io-status");
 const newCanvasDialog = app.querySelector<HTMLDialogElement>("#new-canvas-dialog");
+const clearConfirmDialog = app.querySelector<HTMLDialogElement>(
+  "#clear-confirm-dialog",
+);
 const canvasRatio = app.querySelector<HTMLSelectElement>("#canvas-ratio");
 const canvasWidth = app.querySelector<HTMLInputElement>("#canvas-width");
 const canvasHeight = app.querySelector<HTMLInputElement>("#canvas-height");
+const fitCanvasToWorkspaceButton = app.querySelector<HTMLButtonElement>(
+  "#fit-canvas-to-workspace",
+);
 const openNewCanvasButton = app.querySelector<HTMLButtonElement>("#open-new-canvas");
 const closeNewCanvasButton = app.querySelector<HTMLButtonElement>("#close-new-canvas");
 const createNewCanvasButton = app.querySelector<HTMLButtonElement>("#create-new-canvas");
 const clearButton = app.querySelector<HTMLButtonElement>("#clear-canvas");
+const cancelClearButton = app.querySelector<HTMLButtonElement>("#cancel-clear");
+const confirmClearButton = app.querySelector<HTMLButtonElement>("#confirm-clear");
 const swatches = Array.from(app.querySelectorAll<HTMLButtonElement>(".swatch"));
 const toolButtons = Array.from(app.querySelectorAll<HTMLButtonElement>(".tool-button"));
 
@@ -276,8 +430,14 @@ if (
   !annotationCanvas ||
   !eraserCursor ||
   !panelToggle ||
+  !panelRailStatus ||
+  !panelRailTool ||
+  !panelRailColor ||
+  !railNewCanvasButton ||
+  !railClearButton ||
   !toolSection ||
   !toolTitle ||
+  !shapeToolShortcut ||
   !shapeKindInput ||
   !shapeFillEnabled ||
   !shapeFillOutput ||
@@ -294,19 +454,25 @@ if (
   !themeToggle ||
   !themeOutput ||
   !resetViewButton ||
+  !undoButton ||
+  !redoButton ||
   !ioSection ||
   !pasteImageButton ||
   !copyImageButton ||
   !saveImageButton ||
   !ioStatus ||
   !newCanvasDialog ||
+  !clearConfirmDialog ||
   !canvasRatio ||
   !canvasWidth ||
   !canvasHeight ||
+  !fitCanvasToWorkspaceButton ||
   !openNewCanvasButton ||
   !closeNewCanvasButton ||
   !createNewCanvasButton ||
-  !clearButton
+  !clearButton ||
+  !cancelClearButton ||
+  !confirmClearButton
 ) {
   throw new Error("PromptSketch controls failed to initialize.");
 }
@@ -412,6 +578,10 @@ const promptCanvas = new PromptCanvas(
   canvasThemes[activeTheme],
   {
     onToolSizeChange: adjustToolSize,
+    onHistoryChange: ({ canUndo, canRedo }) => {
+      undoButton.disabled = !canUndo;
+      redoButton.disabled = !canRedo;
+    },
   },
 );
 
@@ -637,13 +807,34 @@ const saveImage = async (): Promise<void> => {
   setIoStatus(`Downloaded ${filename}`, "success");
 };
 
-const isEditableTarget = (target: EventTarget | null): boolean => {
+const NON_TEXT_INPUT_TYPES = new Set([
+  "button",
+  "checkbox",
+  "color",
+  "file",
+  "hidden",
+  "image",
+  "radio",
+  "range",
+  "reset",
+  "submit",
+]);
+
+const isTextEditingTarget = (target: EventTarget | null): boolean => {
   const element = target instanceof Element ? target : document.activeElement;
 
-  return Boolean(
+  if (
     element?.closest(
-      "input, textarea, select, [contenteditable]:not([contenteditable='false'])",
-    ),
+      "textarea, [contenteditable]:not([contenteditable='false'])",
+    )
+  ) {
+    return true;
+  }
+
+  const input = element?.closest("input");
+
+  return Boolean(
+    input instanceof HTMLInputElement && !NON_TEXT_INPUT_TYPES.has(input.type),
   );
 };
 
@@ -653,14 +844,22 @@ const hasSelectedText = (): boolean => {
 };
 
 const shouldPreserveNativeEditing = (target: EventTarget | null): boolean =>
-  newCanvasDialog.open || isEditableTarget(target);
+  newCanvasDialog.open ||
+  clearConfirmDialog.open ||
+  isTextEditingTarget(target);
 
 const syncShortcutHints = (): void => {
-  const modifier = /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "⌘" : "Ctrl+";
+  const usesCommandKey = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+  const modifier = usesCommandKey ? "⌘" : "Ctrl+";
   const shortcuts = {
     paste: `${modifier}V`,
     copy: `${modifier}C`,
     save: `${modifier}S`,
+    undo: `${modifier}Z`,
+    redo: usesCommandKey ? "⇧⌘Z" : "Ctrl+Shift+Z",
+    resetView: "0",
+    newCanvas: `${modifier}N`,
+    clearAnnotations: usesCommandKey ? "⇧⌫" : "Shift+Backspace",
   };
 
   app.querySelectorAll<HTMLElement>("[data-shortcut]").forEach((hint) => {
@@ -670,6 +869,12 @@ const syncShortcutHints = (): void => {
       hint.textContent = shortcuts[shortcut];
     }
   });
+
+  railNewCanvasButton.title = `New canvas — ${shortcuts.newCanvas}`;
+  railNewCanvasButton.ariaLabel = `New canvas — ${shortcuts.newCanvas}`;
+  railClearButton.title = `Clear annotations — ${shortcuts.clearAnnotations}`;
+  railClearButton.ariaLabel =
+    `Clear annotations — ${shortcuts.clearAnnotations}`;
 };
 
 const syncBrush = (): void => {
@@ -677,9 +882,46 @@ const syncBrush = (): void => {
   promptCanvas.updateBrush(getBrushSettings());
 };
 
+const syncPanelRailStatus = (): void => {
+  const selectedSlot = getColorSlot(activeColorSlotId);
+  const shapeKind = shapeKindInput.value as ShapeKind;
+  const shapeShortcut = getShapeShortcut(shapeKind);
+  const toolShortcut =
+    activeTool === "brush"
+      ? "B"
+      : activeTool === "stroke-eraser"
+        ? "E"
+        : shapeShortcut.label;
+  const selectedShapeLabel =
+    shapeKindInput.selectedOptions[0]?.textContent?.replace(/\s+\([A-Z]\)$/, "") ??
+    "Shape";
+  const toolLabel =
+    activeTool === "brush"
+      ? "Brush"
+      : activeTool === "stroke-eraser"
+        ? "Stroke Eraser"
+        : selectedShapeLabel;
+
+  panelRailTool.textContent = toolShortcut;
+  panelRailTool.title = `Tool: ${toolLabel}`;
+  panelRailColor.style.setProperty(
+    "--panel-rail-color",
+    resolveColorSlotValue(activeColorSlotId),
+  );
+  panelRailColor.title = `Color: ${selectedSlot.label}`;
+  panelRailStatus.setAttribute(
+    "aria-label",
+    `Current tool: ${toolLabel}. Current color: ${selectedSlot.label}.`,
+  );
+};
+
 const syncShape = (): void => {
+  const shapeKind = shapeKindInput.value as ShapeKind;
+
   shapeFillOutput.value = shapeFillEnabled.checked ? "Filled" : "Outline";
+  shapeToolShortcut.textContent = getShapeShortcut(shapeKind).label;
   promptCanvas.updateShape(getShapeSettings());
+  syncPanelRailStatus();
 };
 
 const syncColors = (): void => {
@@ -707,6 +949,8 @@ const syncColors = (): void => {
     swatch.classList.toggle("is-selected", isSelected);
     swatch.ariaPressed = String(isSelected);
   });
+
+  syncPanelRailStatus();
 };
 
 const syncToolControls = (): void => {
@@ -742,6 +986,26 @@ const syncToolControls = (): void => {
   promptCanvas.updateTool(activeTool);
   promptCanvas.updateEraserSize(eraserSizeValue);
   syncColors();
+};
+
+const selectColorSlot = (slotId: ColorSlotId): void => {
+  activeColorSlotId = slotId;
+  syncBrush();
+  syncShape();
+  syncColors();
+};
+
+const selectDrawingTool = (
+  tool: CanvasTool,
+  shapeKind?: ShapeKind,
+): void => {
+  if (shapeKind) {
+    shapeKindInput.value = shapeKind;
+    syncShape();
+  }
+
+  activeTool = tool;
+  syncToolControls();
 };
 
 const syncThemeLabel = (): void => {
@@ -829,6 +1093,13 @@ canvasWidth.addEventListener("input", () => {
 canvasHeight.addEventListener("input", () => {
   canvasRatio.value = "custom";
 });
+fitCanvasToWorkspaceButton.addEventListener("click", () => {
+  const size = promptCanvas.getFittedCanvasSize();
+
+  canvasRatio.value = "custom";
+  canvasWidth.value = String(size.width);
+  canvasHeight.value = String(size.height);
+});
 
 pasteImageButton.addEventListener("click", () => {
   void runIoAction("Reading clipboard…", pasteFromClipboard);
@@ -840,6 +1111,14 @@ copyImageButton.addEventListener("click", () => {
 
 saveImageButton.addEventListener("click", () => {
   void runIoAction("Opening save dialog…", saveImage);
+});
+
+undoButton.addEventListener("click", () => {
+  promptCanvas.undo();
+});
+
+redoButton.addEventListener("click", () => {
+  promptCanvas.redo();
 });
 
 document.addEventListener("paste", (event) => {
@@ -874,20 +1153,83 @@ document.addEventListener("copy", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
-  const usesPlatformModifier = event.metaKey || event.ctrlKey;
-
-  if (
-    !usesPlatformModifier ||
-    event.altKey ||
-    event.shiftKey ||
-    event.key.toLowerCase() !== "s" ||
-    shouldPreserveNativeEditing(event.target)
-  ) {
+  if (shouldPreserveNativeEditing(event.target) || event.altKey) {
     return;
   }
 
-  event.preventDefault();
-  void runIoAction("Opening save dialog…", saveImage);
+  const key = event.key.toLowerCase();
+  const usesPlatformModifier = event.metaKey || event.ctrlKey;
+
+  if (usesPlatformModifier) {
+    if (key === "z") {
+      event.preventDefault();
+      if (event.shiftKey) {
+        promptCanvas.redo();
+      } else {
+        promptCanvas.undo();
+      }
+      return;
+    }
+
+    if (key === "y" && event.ctrlKey && !event.metaKey && !event.shiftKey) {
+      event.preventDefault();
+      promptCanvas.redo();
+      return;
+    }
+
+    if (key === "s" && !event.shiftKey) {
+      event.preventDefault();
+      void runIoAction("Opening save dialog…", saveImage);
+      return;
+    }
+
+    if (
+      key === CANVAS_ACTION_SHORTCUTS.newCanvas.key &&
+      !event.shiftKey &&
+      !event.repeat
+    ) {
+      event.preventDefault();
+      openNewCanvas();
+    }
+
+    return;
+  }
+
+  if (
+    event.shiftKey &&
+    key === CANVAS_ACTION_SHORTCUTS.clearAnnotations.key &&
+    !event.repeat &&
+    !hasSelectedText()
+  ) {
+    event.preventDefault();
+    requestClearAnnotations();
+    return;
+  }
+
+  if (event.shiftKey || event.repeat || hasSelectedText()) {
+    return;
+  }
+
+  if (key === CANVAS_ACTION_SHORTCUTS.resetView.key) {
+    event.preventDefault();
+    promptCanvas.resetView();
+    return;
+  }
+
+  const drawingShortcut = getDrawingShortcut(key);
+
+  if (drawingShortcut) {
+    event.preventDefault();
+    selectDrawingTool(drawingShortcut.tool, drawingShortcut.shapeKind);
+    return;
+  }
+
+  const colorSlotId = getColorSlotShortcut(key);
+
+  if (colorSlotId) {
+    event.preventDefault();
+    selectColorSlot(colorSlotId);
+  }
 });
 
 swatches.forEach((swatch) => {
@@ -898,10 +1240,7 @@ swatches.forEach((swatch) => {
   }
 
   swatch.addEventListener("click", () => {
-    activeColorSlotId = slotId;
-    syncBrush();
-    syncShape();
-    syncColors();
+    selectColorSlot(slotId);
   });
 });
 
@@ -913,10 +1252,26 @@ toolButtons.forEach((button) => {
   }
 
   button.addEventListener("click", () => {
-    activeTool = tool;
-    syncToolControls();
+    selectDrawingTool(tool);
   });
 });
+
+const confirmClearAnnotations = (): void => {
+  promptCanvas.clearAnnotations();
+  clearConfirmDialog.close();
+};
+
+const requestClearAnnotations = (): void => {
+  if (!promptCanvas.hasAnnotations()) {
+    return;
+  }
+
+  clearConfirmDialog.showModal();
+};
+
+const openNewCanvas = (): void => {
+  newCanvasDialog.showModal();
+};
 
 resetColorsButton.addEventListener("click", () => {
   colorOverrides = {};
@@ -926,17 +1281,32 @@ resetColorsButton.addEventListener("click", () => {
   syncColors();
 });
 
-clearButton.addEventListener("click", () => {
-  promptCanvas.clearAnnotations();
+clearButton.addEventListener("click", requestClearAnnotations);
+railClearButton.addEventListener("click", requestClearAnnotations);
+confirmClearButton.addEventListener("click", confirmClearAnnotations);
+cancelClearButton.addEventListener("click", () => {
+  clearConfirmDialog.close();
+});
+
+clearConfirmDialog.addEventListener("click", (event) => {
+  if (event.target === clearConfirmDialog) {
+    clearConfirmDialog.close();
+  }
+});
+
+clearConfirmDialog.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    clearConfirmDialog.close();
+  }
 });
 
 resetViewButton.addEventListener("click", () => {
   promptCanvas.resetView();
 });
 
-openNewCanvasButton.addEventListener("click", () => {
-  newCanvasDialog.showModal();
-});
+openNewCanvasButton.addEventListener("click", openNewCanvas);
+railNewCanvasButton.addEventListener("click", openNewCanvas);
 
 closeNewCanvasButton.addEventListener("click", () => {
   newCanvasDialog.close();

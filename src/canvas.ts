@@ -42,9 +42,15 @@ export type CanvasSize = {
   height: number;
 };
 
+export type HistoryState = {
+  canUndo: boolean;
+  canRedo: boolean;
+};
+
 type CanvasCallbacks = {
   onToolSizeChange?: (steps: number) => void;
   onViewChange?: (view: ViewState) => void;
+  onHistoryChange?: (state: HistoryState) => void;
 };
 
 type CanvasElements = {
@@ -92,6 +98,7 @@ const MIN_SCALE = 0.25;
 const MAX_SCALE = 4;
 const MIN_SHAPE_SIZE = 1;
 const DEFAULT_ROUNDED_RECT_RADIUS = 20;
+const MAX_HISTORY_ENTRIES = 100;
 
 export class PromptCanvas {
   private readonly viewport: HTMLElement;
@@ -112,6 +119,9 @@ export class PromptCanvas {
   private baseImage: BaseImage | null = null;
   private hasInitializedView = false;
   private annotations: Annotation[] = [];
+  private undoHistory: Annotation[][] = [];
+  private redoHistory: Annotation[][] = [];
+  private historyTransactionStart: Annotation[] | null = null;
   private activeStroke: Stroke | null = null;
   private activeShape: ActiveShape | null = null;
   private activeEraserPoint: PointerPoint | null = null;
@@ -164,6 +174,7 @@ export class PromptCanvas {
 
     this.configureCanvases();
     this.resetView();
+    this.emitHistoryState();
   }
 
   updateBrush(brush: BrushSettings): void {
@@ -180,17 +191,10 @@ export class PromptCanvas {
   }
 
   updateTool(tool: CanvasTool): void {
-    const hadActiveShape = this.activeShape !== null;
+    this.finishActiveInteraction();
     this.tool = tool;
-    this.activeStroke = null;
-    this.activeShape = null;
-    this.activeEraserPoint = null;
     this.annotationCanvas.dataset.tool = tool;
     this.syncEraserCursorVisibility();
-
-    if (hadActiveShape) {
-      this.renderAnnotations();
-    }
   }
 
   updateEraserSize(size: number): void {
@@ -207,7 +211,7 @@ export class PromptCanvas {
 
   newCanvas(size: CanvasSize): void {
     this.releaseBaseImage();
-    this.clearAnnotations();
+    this.resetAnnotationsAndHistory();
     this.boardSize = normalizeCanvasSize(size);
     this.configureCanvases();
     this.paintBackground();
@@ -224,7 +228,7 @@ export class PromptCanvas {
       width: size.width,
       height: size.height,
     };
-    this.clearAnnotations();
+    this.resetAnnotationsAndHistory();
     this.boardSize = nextSize;
     this.configureCanvases();
     this.paintBackground();
@@ -293,21 +297,65 @@ export class PromptCanvas {
   }
 
   clearAnnotations(): void {
+    this.finishActiveInteraction();
+
+    if (this.annotations.length === 0) {
+      return;
+    }
+
+    this.beginHistoryTransaction();
     this.annotations = [];
-    this.activeStroke = null;
-    this.activeShape = null;
-    this.activeEraserPoint = null;
-    this.annotationContext.clearRect(
-      0,
-      0,
-      this.annotationCanvas.width,
-      this.annotationCanvas.height,
-    );
+    this.renderAnnotations();
+    this.commitHistoryTransaction();
+  }
+
+  hasAnnotations(): boolean {
+    return this.annotations.length > 0;
+  }
+
+  undo(): boolean {
+    this.finishActiveInteraction();
+    const previousAnnotations = this.undoHistory.pop();
+
+    if (!previousAnnotations) {
+      return false;
+    }
+
+    this.redoHistory.push(this.annotations.slice());
+    this.annotations = previousAnnotations.slice();
+    this.renderAnnotations();
+    this.emitHistoryState();
+    return true;
+  }
+
+  redo(): boolean {
+    this.finishActiveInteraction();
+    const nextAnnotations = this.redoHistory.pop();
+
+    if (!nextAnnotations) {
+      return false;
+    }
+
+    this.undoHistory.push(this.annotations.slice());
+    this.annotations = nextAnnotations.slice();
+    this.renderAnnotations();
+    this.emitHistoryState();
+    return true;
+  }
+
+  getFittedCanvasSize(): CanvasSize {
+    const rect = this.viewport.getBoundingClientRect();
+    const padding = getViewPadding(rect.width);
+
+    return normalizeCanvasSize({
+      width: rect.width - padding,
+      height: rect.height - padding,
+    });
   }
 
   resetView(): void {
     const rect = this.viewport.getBoundingClientRect();
-    const padding = rect.width < 680 ? 24 : 56;
+    const padding = getViewPadding(rect.width);
     const scale = clamp(
       Math.min(
         (rect.width - padding) / this.boardSize.width,
@@ -428,6 +476,7 @@ export class PromptCanvas {
     this.isPointerOverCanvas = true;
     this.annotationCanvas.setPointerCapture(event.pointerId);
     const point = this.getPoint(event);
+    this.beginHistoryTransaction();
 
     if (this.tool === "stroke-eraser") {
       this.activeEraserPoint = point;
@@ -547,6 +596,7 @@ export class PromptCanvas {
     this.activeShape = null;
     this.activeEraserPoint = null;
     this.renderAnnotations();
+    this.commitHistoryTransaction();
 
     if (this.annotationCanvas.hasPointerCapture(event.pointerId)) {
       this.annotationCanvas.releasePointerCapture(event.pointerId);
@@ -554,14 +604,7 @@ export class PromptCanvas {
   };
 
   private handlePointerCancel = (): void => {
-    const hadActiveShape = this.activeShape !== null;
-    this.activeStroke = null;
-    this.activeShape = null;
-    this.activeEraserPoint = null;
-
-    if (hadActiveShape) {
-      this.renderAnnotations();
-    }
+    this.finishActiveInteraction();
   };
 
   private handlePointerEnter = (event: PointerEvent): void => {
@@ -697,6 +740,68 @@ export class PromptCanvas {
         settings: this.activeShape.settings,
       });
     }
+  }
+
+  private beginHistoryTransaction(): void {
+    if (this.historyTransactionStart !== null) {
+      return;
+    }
+
+    this.historyTransactionStart = this.annotations.slice();
+  }
+
+  private commitHistoryTransaction(): void {
+    const previousAnnotations = this.historyTransactionStart;
+    this.historyTransactionStart = null;
+
+    if (
+      previousAnnotations === null ||
+      annotationListsMatch(previousAnnotations, this.annotations)
+    ) {
+      return;
+    }
+
+    this.undoHistory.push(previousAnnotations);
+
+    if (this.undoHistory.length > MAX_HISTORY_ENTRIES) {
+      this.undoHistory.shift();
+    }
+
+    this.redoHistory = [];
+    this.emitHistoryState();
+  }
+
+  private finishActiveInteraction(): void {
+    const hadActiveShape = this.activeShape !== null;
+
+    this.activeStroke = null;
+    this.activeShape = null;
+    this.activeEraserPoint = null;
+
+    if (hadActiveShape) {
+      this.renderAnnotations();
+    }
+
+    this.commitHistoryTransaction();
+  }
+
+  private resetAnnotationsAndHistory(): void {
+    this.annotations = [];
+    this.activeStroke = null;
+    this.activeShape = null;
+    this.activeEraserPoint = null;
+    this.historyTransactionStart = null;
+    this.undoHistory = [];
+    this.redoHistory = [];
+    this.renderAnnotations();
+    this.emitHistoryState();
+  }
+
+  private emitHistoryState(): void {
+    this.callbacks.onHistoryChange?.({
+      canUndo: this.undoHistory.length > 0,
+      canRedo: this.redoHistory.length > 0,
+    });
   }
 
   private eraseStrokesAlong(from: PointerPoint, to: PointerPoint): boolean {
@@ -956,8 +1061,18 @@ const cloneShapeSettings = (shape: ShapeSettings): ShapeSettings => ({
   strokeWidth: shape.strokeWidth,
 });
 
+const annotationListsMatch = (
+  first: readonly Annotation[],
+  second: readonly Annotation[],
+): boolean =>
+  first.length === second.length &&
+  first.every((annotation, index) => annotation === second[index]);
+
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
+
+const getViewPadding = (viewportWidth: number): number =>
+  viewportWidth < 680 ? 24 : 56;
 
 const normalizeCanvasSize = (size: CanvasSize): CanvasSize => ({
   width: Math.round(clamp(size.width, MIN_BOARD_SIZE, MAX_BOARD_SIZE)),

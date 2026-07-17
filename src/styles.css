@@ -244,11 +244,102 @@ h2 {
   background: var(--control-background-hover);
 }
 
+.panel-rail-status {
+  display: none;
+}
+
+.workspace[data-panel-state="closed"] .panel-rail-status {
+  position: absolute;
+  top: 90px;
+  right: 6px;
+  left: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+}
+
+.panel-rail-tool {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--control-background);
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.panel-rail-color {
+  display: block;
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--surface-raised);
+  border-radius: 50%;
+  background: var(--panel-rail-color, #1f2320);
+  box-shadow:
+    0 0 0 1px var(--line-strong),
+    0 1px 3px rgba(0, 0, 0, 0.16);
+}
+
+.panel-rail-actions {
+  display: flex;
+  width: 32px;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.panel-rail-action {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--control-background);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.panel-rail-action:hover {
+  border-color: var(--line-strong);
+  background: var(--control-background-hover);
+}
+
+.panel-rail-action--danger {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--line));
+  color: var(--danger);
+}
+
+.panel-rail-action--danger:hover {
+  background: var(--danger-background-hover);
+}
+
+.panel-rail-action svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.4;
+}
+
 .panel-toggle:focus-visible,
+.panel-rail-action:focus-visible,
 .clear-button:focus-visible,
+.dialog-danger-button:focus-visible,
 .primary-button:focus-visible,
 .secondary-button:focus-visible,
 .io-button:focus-visible,
+.history-button:focus-visible,
 .tool-button:focus-visible,
 .swatch:focus-visible,
 select:focus-visible,
@@ -277,6 +368,50 @@ input:focus-visible {
 .panel-section:last-child {
   padding-bottom: 0;
   border-bottom: 0;
+}
+
+kbd {
+  font-family: inherit;
+}
+
+.history-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.history-button {
+  display: flex;
+  min-width: 0;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--control-background);
+  color: var(--ink);
+  font-size: 0.76rem;
+  font-weight: 760;
+  cursor: pointer;
+}
+
+.history-button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--control-background-hover);
+}
+
+.history-button:disabled {
+  cursor: default;
+  opacity: 0.46;
+}
+
+.history-button kbd {
+  color: var(--muted);
+  font-size: 0.59rem;
+  font-weight: 680;
+  white-space: nowrap;
 }
 
 .io-actions {
@@ -417,6 +552,10 @@ input:focus-visible {
 }
 
 .tool-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 3px;
   min-width: 0;
   min-height: 30px;
   padding: 4px 6px;
@@ -428,6 +567,16 @@ input:focus-visible {
   font-weight: 740;
   line-height: 1.15;
   cursor: pointer;
+}
+
+.tool-button kbd {
+  color: var(--muted);
+  font-size: 0.58rem;
+  font-weight: 720;
+}
+
+.tool-button.is-selected kbd {
+  color: var(--accent-strong);
 }
 
 .tool-button:hover {
@@ -561,6 +710,24 @@ input[type="range"] {
   cursor: pointer;
 }
 
+.swatch kbd {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  z-index: 2;
+  display: grid;
+  width: 15px;
+  height: 15px;
+  place-items: center;
+  border-radius: 4px;
+  background: rgba(14, 16, 15, 0.66);
+  color: #ffffff;
+  font-size: 0.57rem;
+  font-weight: 780;
+  line-height: 1;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.25);
+}
+
 .swatch.is-selected::after {
   position: absolute;
   inset: 4px;
@@ -570,7 +737,8 @@ input[type="range"] {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 
-.clear-button {
+.clear-button,
+.dialog-danger-button {
   width: 100%;
   min-height: 32px;
   margin-top: 0;
@@ -583,7 +751,8 @@ input[type="range"] {
   cursor: pointer;
 }
 
-.clear-button:hover {
+.clear-button:hover,
+.dialog-danger-button:hover {
   background: var(--danger-background-hover);
 }
 
@@ -601,6 +770,39 @@ input[type="range"] {
 
 .secondary-button:hover {
   background: var(--secondary-background-hover);
+}
+
+.shortcut-action-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-right: 9px;
+  padding-left: 9px;
+}
+
+.shortcut-action-button kbd {
+  font-size: 0.62rem;
+  font-weight: 700;
+  opacity: 0.72;
+  white-space: nowrap;
+}
+
+.fit-workspace-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.fit-workspace-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
 }
 
 .primary-button {
@@ -647,6 +849,12 @@ input[type="range"] {
 
 .dialog-header h2 {
   font-size: 1rem;
+}
+
+.dialog-copy {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.5;
 }
 
 .dialog-actions {
@@ -699,9 +907,43 @@ input[type="range"] {
   }
 
   .workspace[data-panel-state="closed"] .panel-toggle {
-    width: calc(100% - 20px);
+    width: calc(100% - 176px);
     min-height: 32px;
     margin: 8px 10px;
     writing-mode: horizontal-tb;
+  }
+
+  .workspace[data-panel-state="closed"] .panel-rail-status {
+    top: 8px;
+    right: 10px;
+    left: auto;
+    height: 32px;
+    flex-direction: row;
+    gap: 8px;
+  }
+
+  .workspace[data-panel-state="closed"] .panel-rail-tool {
+    width: 30px;
+    height: 30px;
+  }
+
+  .workspace[data-panel-state="closed"] .panel-rail-color {
+    width: 22px;
+    height: 22px;
+  }
+
+  .workspace[data-panel-state="closed"] .panel-rail-actions {
+    width: auto;
+    flex-direction: row;
+    gap: 6px;
+    padding-top: 0;
+    padding-left: 8px;
+    border-top: 0;
+    border-left: 1px solid var(--line);
+  }
+
+  .workspace[data-panel-state="closed"] .panel-rail-action {
+    width: 30px;
+    height: 30px;
   }
 }
