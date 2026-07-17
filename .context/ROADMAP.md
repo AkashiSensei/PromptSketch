@@ -9,7 +9,7 @@
 - [ ] Add configurable shortcuts and brush settings.
 - [x] Add shape tools.
 - [ ] Tune stroke smoothing and pressure behavior.
-- [ ] Deploy to GitHub Pages.
+- [x] Deploy to GitHub Pages.
 
 ## Decisions
 

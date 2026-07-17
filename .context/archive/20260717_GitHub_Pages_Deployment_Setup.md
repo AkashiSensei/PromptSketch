@@ -22,7 +22,7 @@ Status: COMPLETED on 2026-07-17
 - 已通过 GitHub API 创建 PromptSketch Pages 站点，将 Source 设置为 GitHub Actions，并启用 HTTPS。
 - 当前应用没有后端、远端存储或客户端路由，不需要额外的服务端能力或 SPA 404 fallback。
 - 当前方案假设继续使用仓库项目地址；若以后改用自定义域名，需同步将 Vite `base` 调整为 `/` 并配置 Pages custom domain。
-- 首次线上部署将在包含本任务的提交推送到 `main` 后由 workflow 自动触发，线上验收仍属于 ROADMAP 部署里程碑的完成条件。
+- 包含本任务的提交推送到 `main` 后，首次 workflow 成功完成，项目站点及其 JavaScript、CSS 资源均已通过公网访问验证。
 
 ## Test Plan
 
@@ -32,7 +32,7 @@ Status: COMPLETED on 2026-07-17
 - Actions：workflow 中五个固定的官方 Action 提交均已通过 GitHub API 确认存在。
 - Local：开发服务器会从 `/` 跳转到 `/PromptSketch/`，项目页面和入口模块返回 200。
 - Preview：生产预览的页面、JavaScript 与 CSS 均在 `/PromptSketch/` 下返回 200。
-- GitHub：Pages 配置返回 `build_type: workflow`、HTTPS 已启用，目标地址为预期项目站点。
+- GitHub：Pages 配置返回 `build_type: workflow`、HTTPS 已启用；Actions run `29564074283` 成功，目标页面、JavaScript 与 CSS 均通过公网 200 响应验证。
 
 ## Focusing Files
 
@@ -46,7 +46,7 @@ Status: COMPLETED on 2026-07-17
 - 技术栈是 TypeScript + Vite，无前端框架。
 - 产品方向明确为 local-first 静态应用：无账号、无后端、无远端项目存储。
 - GitHub Pages 已被 SPEC 选为静态托管方案，ROADMAP 也已列出部署里程碑。
-- 剪贴板图片写入依赖 HTTPS、安全上下文、浏览器支持、权限和用户手势；首次发布后仍需真实浏览器验收。
+- 剪贴板图片写入依赖 HTTPS、安全上下文、浏览器支持、权限和用户手势；后续功能变更仍应保留真实浏览器回归。
 - GitHub Pages 适合当前静态架构，但不能承载未来可能新增的后端行为。
 
 ## Task Checklist
@@ -60,4 +60,4 @@ Status: COMPLETED on 2026-07-17
 - [x] 确认固定的 GitHub Actions 提交引用有效。
 - [x] 将仓库 Pages Source 设置为 GitHub Actions 并启用 HTTPS。
 - [x] 审查最终 diff，确保不提交 `dist/`、凭据或无关改动。
-- [x] 记录首次推送将触发线上部署，并保留 ROADMAP 的线上验收条件。
+- [x] 完成首次 Actions 部署、公网页面和静态资源验证，并勾选 ROADMAP 部署里程碑。
