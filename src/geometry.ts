@@ -3,7 +3,9 @@ export type GeometryPoint = {
   y: number;
 };
 
-export type ShapeKind = "rectangle" | "ellipse" | "rounded-rectangle";
+export type ShapeKind = "rectangle" | "ellipse" | "rounded-rectangle" | "line";
+
+export type ClosedShapeKind = Exclude<ShapeKind, "line">;
 
 export type ShapeBounds = {
   x: number;
@@ -60,6 +62,33 @@ export const distanceSquaredBetweenSegments = (
   );
 };
 
+export const distanceSquaredBetweenPoints = (
+  first: GeometryPoint,
+  second: GeometryPoint,
+): number => distanceSquared(first, second);
+
+export const getSnappedLineEnd = (
+  start: GeometryPoint,
+  end: GeometryPoint,
+): GeometryPoint => {
+  const deltaX = end.x - start.x;
+  const deltaY = end.y - start.y;
+  const length = Math.hypot(deltaX, deltaY);
+
+  if (length <= GEOMETRY_EPSILON) {
+    return { x: start.x, y: start.y };
+  }
+
+  const snapIncrement = Math.PI / 4;
+  const angle = Math.atan2(deltaY, deltaX);
+  const snappedAngle = Math.round(angle / snapIncrement) * snapIncrement;
+
+  return {
+    x: start.x + Math.cos(snappedAngle) * length,
+    y: start.y + Math.sin(snappedAngle) * length,
+  };
+};
+
 export const getShapeBounds = (
   start: GeometryPoint,
   end: GeometryPoint,
@@ -89,8 +118,24 @@ export const getRoundedRectRadius = (
   preferredRadius = 20,
 ): number => Math.max(0, Math.min(preferredRadius, bounds.width / 2, bounds.height / 2));
 
+export const lineIntersectsSweptCircle = (
+  lineStart: GeometryPoint,
+  lineEnd: GeometryPoint,
+  sweepStart: GeometryPoint,
+  sweepEnd: GeometryPoint,
+  eraserRadius: number,
+  strokeWidth: number,
+): boolean => {
+  const hitRadius = eraserRadius + strokeWidth / 2;
+
+  return (
+    distanceSquaredBetweenSegments(lineStart, lineEnd, sweepStart, sweepEnd) <=
+    hitRadius * hitRadius
+  );
+};
+
 export const shapeIntersectsSweptCircle = (
-  kind: ShapeKind,
+  kind: ClosedShapeKind,
   bounds: ShapeBounds,
   sweepStart: GeometryPoint,
   sweepEnd: GeometryPoint,
@@ -126,7 +171,7 @@ const directionOrFallback = (value: number, fallback: number): number => {
 };
 
 const getShapeBoundary = (
-  kind: ShapeKind,
+  kind: ClosedShapeKind,
   bounds: ShapeBounds,
   roundedRectRadius: number,
 ): GeometryPoint[] => {
@@ -224,7 +269,7 @@ const polylineIntersectsSweep = (
 };
 
 const pointIsInsideShape = (
-  kind: ShapeKind,
+  kind: ClosedShapeKind,
   point: GeometryPoint,
   bounds: ShapeBounds,
   roundedRectRadius: number,

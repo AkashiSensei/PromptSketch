@@ -1,9 +1,14 @@
 import type { ThemeColorPair, ThemeMode } from "./colors";
 import {
+  distanceSquaredBetweenPoints,
   distanceSquaredBetweenSegments,
   getRoundedRectRadius,
   getShapeBounds,
+  getSnappedLineEnd,
+  lineIntersectsSweptCircle,
   shapeIntersectsSweptCircle,
+  type ClosedShapeKind,
+  type GeometryPoint,
   type ShapeBounds,
   type ShapeKind,
 } from "./geometry";
@@ -73,18 +78,29 @@ type Stroke = {
   brush: BrushSettings;
 };
 
-type ShapeAnnotation = {
-  type: "shape";
-  bounds: ShapeBounds;
-  settings: ShapeSettings;
-};
+type ShapeAnnotationSettings = Omit<ShapeSettings, "kind">;
+
+type ShapeAnnotation =
+  | {
+      type: "shape";
+      geometry: "bounds";
+      bounds: ShapeBounds;
+      settings: ShapeAnnotationSettings & { kind: ClosedShapeKind };
+    }
+  | {
+      type: "shape";
+      geometry: "line";
+      start: GeometryPoint;
+      end: GeometryPoint;
+      settings: ShapeAnnotationSettings & { kind: "line"; style: "outline" };
+    };
 
 type Annotation = Stroke | ShapeAnnotation;
 
 type ActiveShape = {
   start: PointerPoint;
   end: PointerPoint;
-  constrainAspectRatio: boolean;
+  isConstrained: boolean;
   settings: ShapeSettings;
 };
 
@@ -97,6 +113,7 @@ const MAX_BOARD_SIZE = 4096;
 const MIN_SCALE = 0.25;
 const MAX_SCALE = 4;
 const MIN_SHAPE_SIZE = 1;
+const MIN_LINE_LENGTH = 1;
 const DEFAULT_ROUNDED_RECT_RADIUS = 20;
 const MAX_HISTORY_ENTRIES = 100;
 
@@ -495,7 +512,7 @@ export class PromptCanvas {
       this.activeShape = {
         start: point,
         end: point,
-        constrainAspectRatio: event.shiftKey,
+        isConstrained: event.shiftKey,
         settings: cloneShapeSettings(this.shape),
       };
       this.renderAnnotations();
@@ -547,7 +564,7 @@ export class PromptCanvas {
 
     if (this.activeShape) {
       this.activeShape.end = this.getPoint(event);
-      this.activeShape.constrainAspectRatio = event.shiftKey;
+      this.activeShape.isConstrained = event.shiftKey;
       this.renderAnnotations();
       event.preventDefault();
       return;
@@ -580,15 +597,11 @@ export class PromptCanvas {
 
     if (this.activeShape) {
       this.activeShape.end = this.getPoint(event);
-      this.activeShape.constrainAspectRatio = event.shiftKey;
-      const bounds = this.getActiveShapeBounds(this.activeShape);
+      this.activeShape.isConstrained = event.shiftKey;
+      const annotation = this.getActiveShapeAnnotation(this.activeShape);
 
-      if (bounds.width >= MIN_SHAPE_SIZE && bounds.height >= MIN_SHAPE_SIZE) {
-        this.annotations.push({
-          type: "shape",
-          bounds,
-          settings: cloneShapeSettings(this.activeShape.settings),
-        });
+      if (annotation) {
+        this.annotations.push(annotation);
       }
     }
 
@@ -734,11 +747,11 @@ export class PromptCanvas {
     });
 
     if (includeActive && this.activeShape) {
-      this.renderShape({
-        type: "shape",
-        bounds: this.getActiveShapeBounds(this.activeShape),
-        settings: this.activeShape.settings,
-      });
+      const annotation = this.getActiveShapeAnnotation(this.activeShape);
+
+      if (annotation) {
+        this.renderShape(annotation);
+      }
     }
   }
 
@@ -834,6 +847,17 @@ export class PromptCanvas {
       );
     }
 
+    if (annotation.geometry === "line") {
+      return lineIntersectsSweptCircle(
+        annotation.start,
+        annotation.end,
+        eraserStart,
+        eraserEnd,
+        eraserRadius,
+        annotation.settings.strokeWidth,
+      );
+    }
+
     return shapeIntersectsSweptCircle(
       annotation.settings.kind,
       annotation.bounds,
@@ -915,6 +939,34 @@ export class PromptCanvas {
   }
 
   private renderShape(shape: ShapeAnnotation): void {
+    if (shape.geometry === "line") {
+      if (
+        distanceSquaredBetweenPoints(shape.start, shape.end) <
+        MIN_LINE_LENGTH * MIN_LINE_LENGTH
+      ) {
+        return;
+      }
+
+      this.annotationContext.save();
+      this.annotationContext.beginPath();
+      this.annotationContext.moveTo(
+        shape.start.x * this.pixelRatio,
+        shape.start.y * this.pixelRatio,
+      );
+      this.annotationContext.lineTo(
+        shape.end.x * this.pixelRatio,
+        shape.end.y * this.pixelRatio,
+      );
+      this.annotationContext.strokeStyle =
+        shape.settings.color[this.theme.mode];
+      this.annotationContext.lineWidth =
+        shape.settings.strokeWidth * this.pixelRatio;
+      this.annotationContext.lineCap = "round";
+      this.annotationContext.stroke();
+      this.annotationContext.restore();
+      return;
+    }
+
     const { bounds, settings } = shape;
 
     if (bounds.width < MIN_SHAPE_SIZE || bounds.height < MIN_SHAPE_SIZE) {
@@ -959,8 +1011,53 @@ export class PromptCanvas {
     this.annotationContext.restore();
   }
 
-  private getActiveShapeBounds(shape: ActiveShape): ShapeBounds {
-    return getShapeBounds(shape.start, shape.end, shape.constrainAspectRatio);
+  private getActiveShapeAnnotation(shape: ActiveShape): ShapeAnnotation | null {
+    const settings = cloneShapeSettings(shape.settings);
+
+    if (shape.settings.kind === "line") {
+      const end = shape.isConstrained
+        ? getSnappedLineEnd(shape.start, shape.end)
+        : { x: shape.end.x, y: shape.end.y };
+
+      if (
+        distanceSquaredBetweenPoints(shape.start, end) <
+        MIN_LINE_LENGTH * MIN_LINE_LENGTH
+      ) {
+        return null;
+      }
+
+      return {
+        type: "shape",
+        geometry: "line",
+        start: { x: shape.start.x, y: shape.start.y },
+        end,
+        settings: {
+          ...settings,
+          kind: "line",
+          style: "outline",
+        },
+      };
+    }
+
+    const bounds = getShapeBounds(
+      shape.start,
+      shape.end,
+      shape.isConstrained,
+    );
+
+    if (bounds.width < MIN_SHAPE_SIZE || bounds.height < MIN_SHAPE_SIZE) {
+      return null;
+    }
+
+    return {
+      type: "shape",
+      geometry: "bounds",
+      bounds,
+      settings: {
+        ...settings,
+        kind: shape.settings.kind,
+      },
+    };
   }
 
   private drawDot(point: PointerPoint, brush: BrushSettings): void {

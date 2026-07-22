@@ -136,7 +136,7 @@ app.innerHTML = `
               type="button"
               data-tool="shape"
               aria-pressed="false"
-              aria-keyshortcuts="R O U"
+              aria-keyshortcuts="R O U L"
               title="Draw geometric shapes"
             ><span>Shape</span><kbd id="shape-tool-shortcut">R</kbd></button>
             <button
@@ -156,6 +156,7 @@ app.innerHTML = `
               <option value="rectangle">Rectangle (R)</option>
               <option value="ellipse">Ellipse / circle (O)</option>
               <option value="rounded-rectangle">Rounded rectangle (U)</option>
+              <option value="line">Line (L)</option>
             </select>
           </label>
 
@@ -167,7 +168,12 @@ app.innerHTML = `
             <input id="tool-size" type="range" min="2" max="48" step="1" value="8" />
           </label>
 
-          <label class="switch-control shape-only" for="shape-fill-enabled">
+          <label
+            class="switch-control shape-only"
+            id="shape-fill-control"
+            for="shape-fill-enabled"
+            data-disabled="false"
+          >
             <span>
               <span>Solid fill</span>
               <output id="shape-fill-output" for="shape-fill-enabled">Outline</output>
@@ -381,6 +387,7 @@ const toolSection = app.querySelector<HTMLElement>("#tool-section");
 const toolTitle = app.querySelector<HTMLElement>("#tool-section-title");
 const shapeToolShortcut = app.querySelector<HTMLElement>("#shape-tool-shortcut");
 const shapeKindInput = app.querySelector<HTMLSelectElement>("#shape-kind");
+const shapeFillControl = app.querySelector<HTMLElement>("#shape-fill-control");
 const shapeFillEnabled = app.querySelector<HTMLInputElement>("#shape-fill-enabled");
 const shapeFillOutput = app.querySelector<HTMLOutputElement>("#shape-fill-output");
 const toolSizeControl = app.querySelector<HTMLElement>("#tool-size-control");
@@ -439,6 +446,7 @@ if (
   !toolTitle ||
   !shapeToolShortcut ||
   !shapeKindInput ||
+  !shapeFillControl ||
   !shapeFillEnabled ||
   !shapeFillOutput ||
   !toolSizeControl ||
@@ -525,19 +533,27 @@ const getBrushSettings = (): BrushSettings => ({
   opacity: Number(brushOpacity.value) / 100,
 });
 
-const getShapeSettings = (): ShapeSettings => ({
-  kind: shapeKindInput.value as ShapeKind,
-  color: resolveColorSlotPair(activeColorSlotId),
-  style: shapeFillEnabled.checked ? "fill" : "outline",
-  strokeWidth: shapeStrokeWidthValue,
-});
+const getShapeSettings = (): ShapeSettings => {
+  const kind = shapeKindInput.value as ShapeKind;
+
+  return {
+    kind,
+    color: resolveColorSlotPair(activeColorSlotId),
+    style: kind !== "line" && shapeFillEnabled.checked ? "fill" : "outline",
+    strokeWidth: shapeStrokeWidthValue,
+  };
+};
 
 const adjustToolSize = (steps: number): void => {
   if (steps === 0) {
     return;
   }
 
-  if (activeTool === "shape" && shapeFillEnabled.checked) {
+  if (
+    activeTool === "shape" &&
+    shapeKindInput.value !== "line" &&
+    shapeFillEnabled.checked
+  ) {
     return;
   }
 
@@ -917,8 +933,16 @@ const syncPanelRailStatus = (): void => {
 
 const syncShape = (): void => {
   const shapeKind = shapeKindInput.value as ShapeKind;
+  const isLine = shapeKind === "line";
 
-  shapeFillOutput.value = shapeFillEnabled.checked ? "Filled" : "Outline";
+  shapeFillControl.dataset.disabled = String(isLine);
+  shapeFillControl.setAttribute("aria-disabled", String(isLine));
+  shapeFillEnabled.disabled = isLine;
+  shapeFillOutput.value = isLine
+    ? "Unavailable"
+    : shapeFillEnabled.checked
+      ? "Filled"
+      : "Outline";
   shapeToolShortcut.textContent = getShapeShortcut(shapeKind).label;
   promptCanvas.updateShape(getShapeSettings());
   syncPanelRailStatus();
@@ -956,6 +980,8 @@ const syncColors = (): void => {
 const syncToolControls = (): void => {
   const isBrush = activeTool === "brush";
   const isShape = activeTool === "shape";
+  const isLine = shapeKindInput.value === "line";
+  const isFilledShape = isShape && !isLine && shapeFillEnabled.checked;
   const activeSize = isBrush
     ? brushSizeValue
     : isShape
@@ -963,13 +989,15 @@ const syncToolControls = (): void => {
       : eraserSizeValue;
 
   toolSection.dataset.activeTool = activeTool;
-  toolSection.dataset.shapeStyle = shapeFillEnabled.checked ? "fill" : "outline";
-  toolSizeControl.hidden = isShape && shapeFillEnabled.checked;
+  toolSection.dataset.shapeStyle = isFilledShape ? "fill" : "outline";
+  toolSizeControl.hidden = isFilledShape;
   toolTitle.textContent = isBrush ? "Brush" : isShape ? "Shape" : "Stroke Eraser";
   toolSizeLabel.textContent = isBrush
     ? "Brush size"
     : isShape
-      ? "Border width"
+      ? isLine
+        ? "Line width"
+        : "Border width"
       : "Eraser size";
   toolSize.min = isBrush ? "2" : isShape ? "1" : "8";
   toolSize.max = isBrush ? "48" : isShape ? "24" : "96";
@@ -1069,7 +1097,10 @@ toolSize.addEventListener("input", () => {
   toolSizeOutput.value = `${nextSize} px`;
 });
 brushOpacity.addEventListener("input", syncBrush);
-shapeKindInput.addEventListener("change", syncShape);
+shapeKindInput.addEventListener("change", () => {
+  syncShape();
+  syncToolControls();
+});
 shapeFillEnabled.addEventListener("change", () => {
   syncShape();
   syncToolControls();

@@ -34,6 +34,7 @@ export const DRAWING_SHORTCUTS: readonly DrawingShortcut[] = [
     tool: "shape",
     shapeKind: "rounded-rectangle",
   },
+  { key: "l", label: "L", tool: "shape", shapeKind: "line" },
 ] as const;
 
 export const COLOR_SHORTCUTS: Readonly<Record<ColorSlotId, string>> = {

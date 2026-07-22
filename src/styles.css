@@ -648,6 +648,15 @@ kbd {
   transform: translateX(16px);
 }
 
+.switch-control[data-disabled="true"] {
+  color: var(--muted);
+}
+
+.switch-control input:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
 output {
   color: var(--muted);
   font-size: 0.74rem;
